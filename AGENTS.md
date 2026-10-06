@@ -196,3 +196,55 @@ Run `npm run lint` locally before pushing to catch violations early.
 - **Add Route**: Update `Routes` in [ui/app/App.tsx](ui/app/App.tsx) and add nav item to [ui/app/components/Header.tsx](ui/app/components/Header.tsx)
 - **Query Data**: Use `useDql` hook with DQL query string (Dynatrace Query Language)
 - **Style Components**: Import from `@dynatrace/strato-design-tokens/{colors,borders,box-shadows}` for design tokens
+
+## Application topology dashboard
+
+The app in `ui/app/` is a four-column topology map: RUM applications → Services → Kubernetes pods →
+Infrastructure. [ui/app/hooks/useTopologyData.ts](ui/app/hooks/useTopologyData.ts) owns every query;
+[ui/app/components/TopologyGraph.tsx](ui/app/components/TopologyGraph.tsx) owns the SVG.
+
+**Read [docs/dynatrace-query-notes.md](docs/dynatrace-query-notes.md) before touching a query.** It
+records platform behaviour that produces wrong numbers or empty results *without raising an error* —
+silent permission failures, the 1000-record default, `scalar: true` semantics, the two entity models,
+and the `smartscapeNodes`/`smartscapeEdges` traps. Each entry there cost a debugging cycle.
+
+### Division of sources
+
+| Concern | Source |
+| --- | --- |
+| Node inventory and rates | Metrics (`timeseries`) |
+| Relationships between tiers | Smartscape (`smartscapeNodes` / `smartscapeEdges`) |
+| Problems and impacted entities | `dt.davis.problems` (**not** `dt.davis.events`) |
+
+No query reads raw spans or `user.events`. Both were removed: they do not scale (see
+`JOIN_RIGHT_TABLE_SIZE` in the notes) and Smartscape covers the same relationships more completely.
+Reintroducing a raw-record scan should be a deliberate decision, not a convenience.
+
+### The map is not the tiles
+
+The tiles count **inventory** — every entity in the tenant. The map draws **relationships**, which
+only exist where a traced path reached. On one tenant that is 419 pods against 1 the map can draw.
+The two numbers are meant to differ; do not "fix" one to match the other.
+
+The map anchors instead of ranking each column independently. Anchors are the top services, or the
+selected node when there is one; other columns show what the anchors reach, ordered by where their
+nearest already-placed neighbour sits. Ranking columns independently produced a map with almost no
+edges, because the busiest services and the busiest hosts are different entities.
+
+### Working rules for this app
+
+- **Verify DQL against the live environment before shipping.** The notes explain how to run queries
+  with the token in `.dt-app/.tokens.json`. A query that compiles is not a query that is correct.
+- **Bump `app.config.json` version before every deploy** — versions are immutable.
+- **`npm run build` and `npm run lint` must pass.**
+- When a count disagrees with a Dynatrace app, compare against that app's own view before changing
+  the query. Several past "bugs" were the dashboard measuring something different, not incorrectly.
+- Queries report errors **per query** (`errors` from the hook), so one failure does not blank the
+  page. Keep that when adding queries.
+- **Caps are silent.** Every query has an entry in `QUERY_CAPS`; a result sitting on its cap raises
+  the truncation banner. Keep that wiring when adding a query.
+- Sorting is client-side and must stay instant. It only moves into the queries once something came
+  back truncated — see the notes before changing that.
+- Edits here hit large files with template literals and single-line JSX. Shell heredocs mangle
+  backticks, and a short anchor like `  return {` matches the wrong occurrence. Use a Node script
+  with a quoted heredoc, pick a unique anchor, and grep to confirm the edit landed.

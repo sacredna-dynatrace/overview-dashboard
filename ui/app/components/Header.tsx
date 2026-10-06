@@ -7,8 +7,11 @@ export const Header = () => {
     <AppHeader>
       <AppHeader.Navigation>
         <AppHeader.Logo as={Link} to="/" />
+        <AppHeader.NavigationItem as={Link} to="/">
+          Topology
+        </AppHeader.NavigationItem>
         <AppHeader.NavigationItem as={Link} to="/data">
-          Explore Data
+          Query explorer
         </AppHeader.NavigationItem>
       </AppHeader.Navigation>
     </AppHeader>

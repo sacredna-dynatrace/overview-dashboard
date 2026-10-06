@@ -1,49 +1,61 @@
-# Getting Started with your Dynatrace App
+# Overview Dashboard
 
-This project was bootstrapped with Dynatrace App Toolkit.
+A Dynatrace AppEngine app that draws a four-column topology map: **RUM applications → Services →
+Kubernetes workloads → Infrastructure**, with summary tiles, per-node details and a Davis forecast.
 
-It uses React in combination with TypeScript, to provide great developer experience.
+- Nodes and rates come from metrics, relationships from Smartscape, problems from `dt.davis.problems`.
+- Pods are grouped into their Kubernetes workload on the map (the tiles still count pods).
+- Service → workload traffic is drawn as Sankey bands with flowing particles, from
+  `dt.service.request.count` split by `k8s.workload.name`.
+- Entry services that no RUM application reaches are fed from a dashed **External callers** node.
+  It is a stand-in, not a monitored entity.
 
-## Available Scripts
+Before changing a query, read [docs/dynatrace-query-notes.md](docs/dynatrace-query-notes.md). It
+records platform behaviour that produces wrong numbers without raising an error. Working rules for
+coding agents are in [AGENTS.md](AGENTS.md).
 
-In the project directory, you can run:
+## Getting started
 
-### `npm run start`
+Requires Node.js 20.19 or later.
 
-Runs the app in the development mode. A new browser window with your running app will be automatically opened.
+```bash
+npm install
+npm run start     # dev server, opens the app against the tenant in app.config.json
+```
 
-Edit a component file in `ui` and save it. The page will reload when you make changes. You may also see any errors in the console.
+## Targeting a tenant
 
-### `npm run build`
+`environmentUrl` in [app.config.json](app.config.json) decides where `start` and `deploy` go. Change
+it to deploy to another tenant.
 
-Builds the app for production to the `dist` folder. It correctly bundles your app in production mode and optimizes the build for the best performance.
+## Deploying
 
-### `npm run deploy`
+```bash
+npm run lint
+npm run build
+npm run deploy
+```
 
-Builds the app and deploys it to the specified environment in `app.config.json`.
+**Bump `app.version` in `app.config.json` before every deploy.** Versions are immutable per tenant:
+redeploying an installed version with different content fails with
+`Cannot install app with version X because the same version is already installed with a different checksum.`
+Each tenant checks this on its own, so a version that is free on one tenant may already be taken on another.
 
-### `npm run uninstall
+## Required scopes
 
-Uninstalls the app from the specified environment in `app.config.json`.
+Declared in `app.config.json` and granted on first open after a scope change:
 
-### `npm run generate:function`
+| Scope | Used for |
+| --- | --- |
+| `storage:buckets:read` | Every Grail query. Without it queries succeed but return no records |
+| `storage:metrics:read` | RUM, service, host and Kubernetes metrics |
+| `storage:smartscape:read` | Smartscape nodes and edges |
+| `storage:entities:read` | Classic entity model (`dt.entity.service` callers, names) |
+| `storage:events:read` | `dt.davis.problems` |
+| `storage:spans:read`, `storage:user.events:read` | Declared; no current query reads raw spans or user events |
+| `davis:analyzers:execute` | Davis forecast in the details panel |
 
-Generates a new serverless function for your app in the `api` folder.
+## Never commit
 
-### `npm run update`
-
-Updates @dynatrace-scoped packages to the latest version and applies automatic migrations.
-
-### `npm run info`
-
-Outputs the CLI and environment information.
-
-### `npm run help`
-
-Outputs help for the Dynatrace App Toolkit.
-
-## Learn more
-
-You can find more information on how to use all the features of the new Dynatrace Platform in [Dynatrace Developer](https://dt-url.net/developers).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+`.dt-app/` holds the OAuth tokens from the last `dt-app` command and is ignored by `.gitignore`.
+Keep it that way.

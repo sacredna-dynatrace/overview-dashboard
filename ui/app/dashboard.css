@@ -1,0 +1,142 @@
+:root {
+  --dashboard-ink: #162433;
+  --dashboard-muted: #64748b;
+  --dashboard-line: #dbe4ec;
+  --dashboard-surface: #ffffff;
+  --dashboard-background: #f4f7fa;
+}
+
+.dashboard-page { min-height: calc(100vh - 56px); padding: 32px 40px 48px; color: var(--dashboard-ink); background: radial-gradient(circle at 82% 2%, #e1f5f3 0, transparent 28%), var(--dashboard-background); font-family: "Segoe UI", sans-serif; }
+.dashboard-heading { display: flex; justify-content: space-between; gap: 32px; align-items: end; max-width: 1440px; margin: 0 auto 28px; }
+.eyebrow { margin: 0 0 10px; color: #087f80; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; }
+.dashboard-heading h1 { margin: 0; font-size: 32px; letter-spacing: 0; }
+.version-badge { display: inline-block; margin-left: 10px; padding: 4px 7px; border: 1px solid #bae6fd; border-radius: 4px; color: #0369a1; background: #f0f9ff; vertical-align: middle; font-size: 11px; font-weight: 700; letter-spacing: .5px; }
+.dashboard-description { max-width: 620px; margin: 10px 0 0; color: var(--dashboard-muted); font-size: 14px; }
+.dashboard-actions { display: flex; align-items: center; gap: 10px; color: var(--dashboard-muted); font-size: 12px; font-weight: 600; }
+.query-message { display: flex; align-items: center; gap: 12px; max-width: 1440px; margin: 0 auto 18px; padding: 13px 16px; border: 1px solid #bae6fd; border-radius: 6px; background: #f0f9ff; color: #075985; font-size: 12px; }
+.query-message span { flex: 1; }
+.query-error { border-color: #fecaca; background: #fff7f7; color: #991b1b; align-items: start; }
+.query-error-list { display: flex; flex-direction: column; gap: 6px; flex: 1; }
+.query-error-list span { display: block; line-height: 1.5; }
+.query-message button { border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; padding: 5px 9px; font-size: 11px; }
+.metric-strip { display: grid; grid-template-columns: repeat(5, 1fr); max-width: 1440px; margin: 0 auto 20px; border: 1px solid var(--dashboard-line); border-radius: 7px; background: var(--dashboard-surface); box-shadow: 0 8px 24px rgb(30 58 80 / 5%); }
+.metric-tile { display: flex; flex-direction: column; align-items: start; min-height: 104px; padding: 18px 22px; border-right: 1px solid var(--dashboard-line); background: var(--dashboard-surface); }
+.metric-tile:last-child { border-right: 0; }
+.metric-tile:hover { background: #f8fbfd; }
+.metric-strip span { display: block; color: var(--dashboard-muted); font-size: 12px; }
+/* The count doubles as the deep link into the owning Dynatrace app. */
+/* The icon is the cue that the count is a link; colour alone was not read as one. */
+.metric-value { display: inline-flex; align-items: center; gap: 8px; margin: 8px 0 4px; color: var(--dashboard-ink); font-size: 27px; font-weight: 700; text-decoration: none; }
+.metric-value svg { width: 15px; height: 15px; color: #64748b; }
+.metric-value:hover svg, .metric-value:focus-visible svg { color: #0369a1; }
+.metric-value:hover, .metric-value:focus-visible { color: #0369a1; text-decoration: underline; text-underline-offset: 4px; }
+.metric-tile > button { padding: 0; border: 0; background: transparent; color: #16805b; cursor: pointer; font-size: 11px; text-align: left; }
+.metric-tile > button:hover { text-decoration: underline; }
+/* Outranks the generic `.metric-strip span` rule, which would otherwise force block/muted/12px. */
+.metric-value .metric-critical { display: inline; color: #c9143c; font-size: inherit; }
+.query-inspector { max-width: 1440px; margin: -4px auto 20px; border: 1px solid #7dd3fc; border-radius: 7px; background: #f8fcff; overflow: hidden; }
+.query-inspector-heading { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #bae6fd; color: #075985; }
+.query-inspector-heading strong, .query-inspector-heading span { display: block; }
+.query-inspector-heading span { margin-top: 3px; color: var(--dashboard-muted); font-size: 11px; font-weight: 400; }
+.query-inspector-heading button { border: 1px solid #7dd3fc; border-radius: 4px; background: white; color: #075985; cursor: pointer; padding: 5px 10px; font-size: 11px; }
+.query-inspector pre { margin: 0; padding: 16px; overflow: auto; color: #334155; font: 12px/1.55 Consolas, monospace; white-space: pre-wrap; }
+.content-grid { display: grid; grid-template-columns: minmax(0, 1fr) 294px; gap: 20px; max-width: 1440px; margin: 0 auto; }
+.graph-panel, .details-panel { border: 1px solid var(--dashboard-line); border-radius: 7px; background: var(--dashboard-surface); box-shadow: 0 8px 24px rgb(30 58 80 / 5%); }
+.panel-heading { display: flex; align-items: start; justify-content: space-between; padding: 20px 22px 12px; }
+.panel-heading h2 { margin: 0; font-size: 16px; }
+.panel-heading p { margin: 5px 0 0; color: var(--dashboard-muted); font-size: 12px; }
+.panel-badge { display: inline-block; margin-left: 8px; padding: 3px 7px; border: 1px solid #99e6e2; border-radius: 4px; background: #effcfb; color: #0b6e6b; vertical-align: middle; font-size: 10px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; }
+.panel-links { display: flex; gap: 14px; margin-top: 8px; }
+.panel-links button { padding: 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
+.panel-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
+.live-indicator { display: flex; align-items: center; gap: 6px; color: #16805b; font-size: 11px; font-weight: 700; }
+.live-indicator i { width: 7px; height: 7px; border-radius: 50%; background: #16a36d; box-shadow: 0 0 0 4px #dcfce7; }
+.topology-shell { position: relative; min-height: 480px; padding: 22px 20px 16px; overflow-x: auto; }
+.topology-column-labels { position: absolute; top: 4px; left: 20px; width: 1000px; height: 20px; color: var(--dashboard-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
+.topology-column-labels span { position: absolute; width: 120px; text-align: center; }
+.topology-canvas { display: block; width: 1000px; min-width: 1000px; height: 430px; margin: 18px auto 0; border: 1px solid #edf2f7; border-radius: 5px; }
+.topology-node { cursor: pointer; outline: none; }
+.topology-node:focus rect, .topology-node:hover rect { filter: drop-shadow(0 3px 5px rgb(15 23 42 / 14%)); }
+.topology-node-name { fill: var(--dashboard-ink); font-size: 10.5px; font-weight: 700; }
+.topology-edge-pipe { fill: none; stroke: #dbe4ec; stroke-linecap: round; }
+.topology-edge-flow { fill: none; stroke: #0ea5a4; stroke-linecap: round; stroke-dasharray: 9 15; animation: topology-flow 1.3s linear infinite; }
+.topology-edge-flow.is-active { stroke: #0284c7; }
+/* Hosting edges carry the infrastructure colour, so the map reads "this host carries that load". */
+.topology-edge-flow.is-hosting { stroke: #f97316; }
+.topology-edge-flow.is-hosting.is-active { stroke: #0284c7; }
+/* Offset equals one dash + one gap, so the loop restarts exactly where it began. */
+@keyframes topology-flow { to { stroke-dashoffset: -24; } }
+.topology-node-badge text { fill: #fff; font-size: 10px; font-weight: 700; }
+.workload-pods { display: flex; flex-direction: column; gap: 8px; width: 100%; }
+.workload-pod { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
+.workload-pod i { width: 8px; height: 8px; border-radius: 50%; }
+.workload-pod a { overflow: hidden; color: var(--dashboard-ink); text-overflow: ellipsis; white-space: nowrap; }
+.workload-pod b { color: var(--dashboard-muted); font-weight: 600; }
+.workload-pods-more { color: var(--dashboard-muted); font-size: 11px; }
+.topology-node-meta, .topology-edge-label { fill: var(--dashboard-muted); font-size: 10px; }
+.topology-edge-label { paint-order: stroke; stroke: #fff; stroke-width: 4px; stroke-linejoin: round; }
+.topology-overflow-label { fill: var(--dashboard-muted); font-size: 11px; font-style: italic; }
+.topology-legend { display: flex; justify-content: center; gap: 22px; margin-top: 12px; color: var(--dashboard-muted); font-size: 11px; }
+.topology-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.topology-legend i { width: 8px; height: 8px; border-radius: 50%; }
+.topology-legend .legend-edge { width: 34px; height: 10px; }
+.topology-legend-divider { width: 1px; height: 12px; background: var(--dashboard-line); }
+.clear-selection { display: block; margin: 10px auto 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
+.details-panel { min-height: 300px; }
+.path-detail, .selected-detail { display: flex; flex-direction: column; padding: 20px 22px; }
+.path-kicker, .detail-type { color: #087f80; font-size: 10px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.path-detail strong { margin-top: 10px; font-size: 16px; }
+.path-rate { margin-top: 26px; color: #075985; font-size: 30px; font-weight: 700; }
+.path-rate small { color: var(--dashboard-muted); font-size: 12px; font-weight: 500; }
+.path-detail p { margin: 26px 0 0; color: var(--dashboard-muted); font-size: 12px; line-height: 1.5; }
+.selected-detail > strong { margin-top: 14px; font-size: 28px; }
+/* Mirrors the summary tiles: the value itself is the deep link into the owning Dynatrace app. */
+.selected-detail > span { color: var(--dashboard-muted); font-size: 12px; }
+/* A labelled action, not a styled number: a bare coloured value did not read as clickable. */
+.entity-link { display: inline-flex; align-items: center; gap: 6px; align-self: start; margin-top: 12px; padding: 6px 10px; border: 1px solid #bae6fd; border-radius: 5px; background: #f0f9ff; color: #0369a1; font-size: 12px; font-weight: 600; text-decoration: none; }
+.entity-link:hover, .entity-link:focus-visible { border-color: #7dd3fc; background: #e0f2fe; }
+.entity-link svg { width: 14px; height: 14px; }
+.selected-detail hr { width: 100%; margin: 22px 0 16px; border: 0; border-top: 1px solid var(--dashboard-line); }
+.health-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; width: 100%; margin: 4px 0 10px; }
+.health-grid span { display: block; color: var(--dashboard-muted); font-size: 11px; }
+.health-grid b { display: block; margin-top: 2px; color: var(--dashboard-ink); font-size: 15px; }
+.health-grid b.is-critical { color: #c9143c; }
+.health-link { align-self: start; padding: 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
+.health-link:hover { text-decoration: underline; }
+.connection-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eef2f6; font-size: 12px; }
+.connection-row b { color: #075985; }
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-edge-flow { animation: none; stroke-dasharray: none; }
+  .topology-particle { display: none; }
+}
+
+@media (max-width: 920px) {
+  .dashboard-page { padding: 24px 20px 36px; }
+  .dashboard-heading { align-items: start; flex-direction: column; gap: 18px; }
+  .content-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 640px) {
+  .metric-strip { grid-template-columns: repeat(2, 1fr); }
+  /* Five tiles no longer divide evenly into two columns, so rows are handled generically. */
+  .metric-tile:nth-child(even) { border-right: 0; }
+  .metric-tile { border-bottom: 1px solid var(--dashboard-line); }
+  .metric-tile:last-child { border-bottom: 0; }
+  .dashboard-heading h1 { font-size: 26px; }
+  .dashboard-actions { flex-wrap: wrap; }
+}
+/* Aligns the Strato message with the tiles and the map below it. */
+.query-notice { max-width: 1440px; margin: 0 auto 18px; }
+.query-notice .query-error-list { gap: 6px; font-size: 12px; line-height: 1.5; }
+
+/* Davis forecast: a prediction sits between the measured numbers and the relationship list. */
+.forecast-row { display: flex; flex-direction: column; gap: 3px; margin: 4px 0 2px; }
+.forecast-row b { color: #075985; font-size: 18px; }
+.forecast-row span { color: var(--dashboard-muted); font-size: 11px; }
+.forecast-pending { margin: 6px 0 2px; color: var(--dashboard-muted); font-size: 12px; }
+.topology-band path { fill: none; stroke-opacity: 0.32; stroke-linecap: butt; transition: stroke-opacity 0.15s; }
+.topology-band:hover path, .topology-band.is-active path { stroke-opacity: 0.55; }
+.topology-node.is-virtual text { fill: #475569; }
+.virtual-note { margin: 12px 0 0; color: var(--dashboard-muted); font-size: 12px; line-height: 1.5; }
+.topology-particle { pointer-events: none; opacity: 0.85; }
