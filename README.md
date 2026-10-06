@@ -3,6 +3,8 @@
 Dynatrace AppEngine 앱입니다. **RUM 애플리케이션 → 서비스 → Kubernetes 워크로드 → 인프라** 네 열로
 토폴로지 맵을 그리고, 요약 타일, 노드별 상세 정보, Davis 예측을 함께 보여 줍니다.
 
+![Application topology 화면: 요약 타일, External callers에서 서비스·워크로드·호스트로 이어지는 트래픽 맵, 상세 패널](docs/images/overview.png)
+
 - 노드와 요청량은 메트릭에서, 관계는 Smartscape에서, 문제는 `dt.davis.problems`에서 가져옵니다.
 - 맵에서는 Pod를 소속 Kubernetes 워크로드 단위로 묶어서 보여 줍니다. 상단 타일은 계속 Pod 단위로 셉니다.
 - 서비스 → 워크로드 트래픽은 입자가 흐르는 Sankey 띠로 그립니다. 값은 `dt.service.request.count`를
