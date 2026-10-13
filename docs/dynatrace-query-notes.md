@@ -203,7 +203,15 @@ K8S_POD   --belongs_to->  K8S_CLUSTER / K8S_NAMESPACE
 K8S_POD   --is_part_of->  K8S_DEPLOYMENT / K8S_REPLICASET
 CONTAINER --is_part_of->  K8S_POD
 CONTAINER --runs_on---->  HOST
+SERVICE   --runs_on---->  PROCESS
+PROCESS   --runs_on---->  HOST / CONTAINER
+PROCESS   --calls------>  PROCESS
+OS_SERVICE --runs_on--->  PROCESS
 ```
+
+`PROCESS` nodes carry `dt.process_group.id`, `dt.process_group.detected_name`, `host.name`,
+`process.containerized` and `id_classic` (`PROCESS_GROUP_INSTANCE-…`). Smartscape `HOST` ids equal
+the classic `HOST-…` ids. There is no `SERVICE calls SERVICE` edge (see the external-callers notes).
 
 There is **no direct pod→host edge**. Go through the container: `CONTAINER is_part_of K8S_POD` joined
 with `CONTAINER runs_on HOST`. `K8S_NODE` is a different entity from the monitored `HOST` that the
@@ -355,10 +363,39 @@ order next to a service list in traffic order, with edges crossing between them.
 
 ### One column can hold two units
 
-A service the request metrics do not cover still gets a node from the network-bytes query, carrying
+A service the request metrics do not cover used to get a node from the network-bytes query, carrying
 `B/s` instead of `req/min`. Comparing the raw numbers ranked a 464 KB/s service above one serving
 97,000 req/min. Values in the column's own unit sort first, and only same-unit values are compared.
-The "Busiest service" panel picks from `req/min` services for the same reason.
+The "Busiest service" panel picks from `req/min` services for the same reason. The network-bytes
+query is gone (see below), but the unit rule stays: pods count containers, process groups processes.
+
+## Services outside Kubernetes: process groups
+
+The third column is "where the service runs". A service with a Kubernetes workload (Smartscape pod
+edge or workload-tagged traffic) is drawn on its workload; any other service is drawn on its
+**process group**, built from `SERVICE runs_on PROCESS` + `PROCESS runs_on HOST` (`serviceProcess`).
+Kubernetes services also have `SERVICE runs_on PROCESS`, which is why the workload wins - otherwise
+the same service would be placed twice.
+
+**Smartscape does not have every service.** On diw85600 `[embedded]` (a `DATABASE_SERVICE` inside
+the Spring Boot process, called by hello-world) has no Smartscape edge of any kind and no Smartscape
+SERVICE node, while classic `dt.entity.service` still has `runs_on` its process group instance. So
+`serviceProcess` reads the classic `runs_on[dt.entity.process_group_instance]`, maps it to PROCESS
+via `id_classic`, and `append`s the Smartscape `SERVICE runs_on PROCESS` edges, deduplicated. Each
+process is then followed to its pod (`PROCESS runs_on CONTAINER`, `CONTAINER is_part_of K8S_POD`):
+a service whose process sits in a pod on the map is linked to that pod's workload, not to a process
+group, so one process is never drawn as both.
+
+This replaced the service → host query built on `dt.process.network.bytes_*`. It drew an edge only
+where that metric was non-zero, so on a tenant whose hosts did not report it a VM-hosted service
+showed no host at all - a RUM app's services could be selected and the two right columns stayed
+empty.
+
+Bands into a process group come from `dt.service.request.count` split by `dt.process_group.id`
+(verified), excluding requests that carry `k8s.workload.name` so nothing is counted on both a
+workload band and a process-group band. Process groups exist only on the map; the pod tile is
+unaffected. Verified on diw85600, where every service is in Kubernetes, so no process group is
+drawn there - the effect has to be checked on a tenant with VM-hosted services.
 
 ## The pod column is grouped by workload
 
@@ -381,6 +418,22 @@ Only two hops on the map have a measured volume, and only those are drawn as San
   `dt.smartscape.k8s_deployment`). It is generated from spans at ingest
   (`dt.metrics.source: openpipeline:spans`), so splitting by workload is a metric read, not a span
   scan.
+  **The `k8s.*` dimensions are not on every tenant.** On one tenant the same metric carried only
+  `k8s.namespace.name` and `k8s.cluster.uid`, plus the classic `dt.entity.cloud_application` (the
+  Deployment) and `dt.entity.kubernetes_cluster` - no `k8s.workload.name`, no `k8s.cluster.name`.
+  Filtering on `k8s.workload.name` dropped every request, so services in plain workloads got a
+  relationship line. The query now falls back to
+  `entityName(dt.entity.cloud_application)` / `entityName(dt.entity.kubernetes_cluster)` (equal to the
+  `k8s.*` values on diw85600), and the map matches on namespace + workload when the cluster name
+  differs and that pair is unique. Spans showed the workload on that tenant too, under the older
+  `dt.kubernetes.*` attribute names - a trace having it says nothing about the metric having it.
+- **Single placement, inferred.** Some tenants put no placement dimension on the metric at all: a
+  VM-hosted Spring Boot service (`dt.system.monitoring_source: fullstack_container`) carried only
+  `dt.entity.service`, `failed`, `endpoint.name`, `http.response.status_code`, `dt.service.name` -
+  no process group, no Kubernetes. When a service has exactly one placement edge and nothing
+  measured it, `inferSinglePlacement` gives that edge the service's own rate and failure rate,
+  marked `inferred` (tooltip: "inferred: single placement", band drawn a shade lighter). Two or more
+  placements stay relationship lines - there is no basis for dividing the rate.
 - **External callers → entry service.** The band is the service's own request rate. That equals
   outside traffic only for an entry service, so the stand-in node attaches to services with no
   service caller and no RUM edge.
@@ -398,6 +451,14 @@ is why the bands land on smaller services further down: the busy ones are intern
 
 The node shows "N shown" (sum of drawn bands) above "N total req/min" (all entry services), because
 most entry services fall outside the ten drawn.
+
+Failed requests are drawn as red particles, in proportion to each band's failure share (rounded
+to whole particles; the tooltip has the exact rate). Service → workload splits by the metric's own
+`failed` dimension (observed as a boolean on `dt.service.request.count`) instead of adding a
+filtered second metric to the block, because a multi-metric `timeseries` intersects and an edge
+with no failures would vanish. External callers → service uses the service-wide rate from
+`serviceHealth`, which for an entry service is the rate of exactly the traffic on that band.
+The `failed` split was not re-verified live when it was added (token session had expired).
 
 RUM → service still has no per-edge volume. Weighting it with the service rate would double-count a
 service several frontends call, so it stays a relationship line.

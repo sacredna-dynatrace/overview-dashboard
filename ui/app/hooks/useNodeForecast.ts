@@ -42,8 +42,8 @@ const forecastMetric = (node: TopologyNode): { expression: string; unit: string;
   // A summed count is per interval bucket, not per minute. Labelling the raw number "req/min"
   // would repeat the unit mix-up the services column already had.
   if (node.kind === "service") return { expression: series("dt.service.request.count", "sum", "dt.entity.service"), unit: "req/min", perMinute: true };
-  // A workload node stands for many pods; its members are listed in the panel instead.
-  if (node.members) return null;
+  // A workload or process group stands for many instances; they are listed in the panel instead.
+  if (node.members || node.processes) return null;
   // Pods are keyed by name, not by entity id - the container metrics carry no pod entity dimension.
   if (node.kind === "paas") return { expression: `timeseries value = avg(dt.kubernetes.container.cpu_usage), by: { k8s.pod.name }, filter: k8s.pod.name == "${node.name}", from: ${HISTORY}, interval: ${INTERVAL_MINUTES}m`, unit: "mCPU" };
   return null;

@@ -8,6 +8,8 @@ import { RefreshControl } from "../components/RefreshControl";
 import { TopologyGraph, formatEdgeValue, formatNodeValue, formatThroughput, type TopologyNode, type TopologySort } from "../components/TopologyGraph";
 import { buildTileLinks, buildEntityLink } from "../components/TileLinks";
 import { SortControl } from "../components/SortControl";
+import { StatusIcon } from "../components/StatusMark";
+import { paletteVars } from "../theme/colors";
 import { ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { useTopologyData, type TopologyQueryKey } from "../hooks/useTopologyData";
 import { useNodeForecast, FORECAST_HORIZON_HOURS } from "../hooks/useNodeForecast";
@@ -24,7 +26,8 @@ const QUERY_LABELS: Record<TopologyQueryKey, string> = {
   service: "Services",
   infrastructure: "Infrastructure",
   problems: "Problems",
-  serviceHost: "Pod-to-host traffic",
+  serviceProcess: "Service → process → host placement",
+  serviceProcessTraffic: "Service-to-process-group traffic",
   pods: "Kubernetes pods",
   podHost: "Pod-to-host placement",
   podHealth: "Pod utilization",
@@ -144,7 +147,7 @@ export const Home = () => {
     return () => clearInterval(timer);
   }, [autoRefreshMs]);
 
-  return <main className="dashboard-page">
+  return <main className="dashboard-page" style={paletteVars as React.CSSProperties}>
     <section className="dashboard-heading"><div><p className="eyebrow">SERVICE FLOW / LIVE OVERVIEW</p><h1>Application topology <span className="version-badge">v{APP_VERSION}</span></h1><p className="dashboard-description">Follow request traffic from real users through services to the infrastructure carrying the load.</p></div><div className="dashboard-actions"><TimeframeSelector value={timeframe} onChange={(value) => { if (value) { setTimeframe(value); setRefreshedAt(Date.now()); setSelectedNode(null); } }}><TimeframeSelector.Presets>{TIMEFRAME_SELECTOR_PRESETS.map((preset) => <TimeframeSelector.PresetItem key={`${preset.from}-${preset.to}`} value={preset} />)}<TimeframeSelector.PresetItem value={yesterdayPreset}>Yesterday</TimeframeSelector.PresetItem></TimeframeSelector.Presets></TimeframeSelector><RefreshControl intervalMs={autoRefreshMs} onIntervalChange={setAutoRefreshMs} onRefresh={refresh} isRefreshing={isLoading} /></div></section>
     {errors.length > 0 && <div className="query-message query-error" role="alert"><div className="query-error-list"><strong>{errors.length} of the dashboard’s queries failed. The rest of the page is still accurate.</strong>{errors.map((item) => <span key={item.label}><b>{item.label}:</b> {item.message}</span>)}</div><button type="button" onClick={refresh}>Retry</button></div>}
     {/* Truncation is silent on the platform side: a capped query returns its maximum and no error.
@@ -181,7 +184,7 @@ export const Home = () => {
       </div>)}
     </section>
     {selectedQuery && <section className="query-inspector" aria-label="Executed DQL"><div className="query-inspector-heading"><div><strong>{QUERY_LABELS[selectedQuery]} DQL</strong><span>{recordCounts[selectedQuery]} records returned</span></div><button type="button" onClick={() => setSelectedQuery(null)}>Close</button></div><pre>{queries[selectedQuery]}</pre></section>}
-    <section className="content-grid"><div className="graph-panel"><div className="panel-heading"><div><h2>Traffic map <span className="panel-badge">Smartscape</span></h2><p>Services and what connects to them · nodes and rates from metrics, relationships from the Smartscape topology</p><div className="panel-links"><button type="button" onClick={() => setSelectedQuery("rumService")}>RUM → service DQL</button><button type="button" onClick={() => setSelectedQuery("pods")}>Pods DQL</button><button type="button" onClick={() => setSelectedQuery("serviceWorkload")}>Service → workload traffic DQL</button><button type="button" onClick={() => setSelectedQuery("entryServices")}>Entry services DQL</button><button type="button" onClick={() => setSelectedQuery("serviceHost")}>Pod → host DQL</button></div></div><div className="panel-controls"><SortControl value={sortBy} onChange={setSortBy} /><span className="live-indicator"><i /> Live</span></div></div>{nodes.length > 0 && <TopologyGraph nodes={map.nodes} edges={map.edges} sortBy={sortBy} onSelectionChange={setSelectedNode} />}</div><aside className="details-panel"><div className="panel-heading"><div><h2>{selectedNode ? selectedNode.name : "Busiest service"}</h2><p>{selectedNode ? selectedNode.subtitle : busiestService?.unit === "req/min" ? "Highest request rate in the Services column" : "Highest traffic in the Services column"}</p></div></div>{selectedNode ? <div className="selected-detail"><div className="detail-type">{selectedNode.virtual ? "not a monitored entity" : selectedNode.kind}</div><strong>{formatNodeValue(selectedNode)}</strong><span>Selected timeframe</span>{selectedNode.virtual && <p className="virtual-note">No RUM application reaches these services, and no other service is known to call them - OTLP-only services are included because their callers cannot be checked. This stands in for their callers - browsers, API clients, batch jobs - and its rate is the services' own request rate. The map shows the top services only, so the bands drawn add up to less than the total.</p>}{!selectedNode.members && !selectedNode.virtual && <a className="entity-link" href={buildEntityLink(selectedNode.kind, selectedNode.entityId ?? selectedNode.id.replace(/^(rum|service|paas|infrastructure)-/, ""), timeframe)} target="_blank" rel="noopener noreferrer">Open {selectedNode.name} in Dynatrace<ExternalLinkIcon /></a>}{(() => {
+    <section className="content-grid"><div className="graph-panel"><div className="panel-heading"><div><h2>Traffic map <span className="panel-badge">Smartscape</span></h2><p>Services and what connects to them · nodes and rates from metrics, relationships from the Smartscape topology</p><div className="panel-links"><button type="button" onClick={() => setSelectedQuery("rumService")}>RUM → service DQL</button><button type="button" onClick={() => setSelectedQuery("pods")}>Pods DQL</button><button type="button" onClick={() => setSelectedQuery("serviceWorkload")}>Service → workload traffic DQL</button><button type="button" onClick={() => setSelectedQuery("entryServices")}>Entry services DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcess")}>Service → process → host DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcessTraffic")}>Service → process traffic DQL</button></div></div><div className="panel-controls"><SortControl value={sortBy} onChange={setSortBy} /><span className="live-indicator"><i /> Live</span></div></div>{nodes.length > 0 && <TopologyGraph nodes={map.nodes} edges={map.edges} sortBy={sortBy} onSelectionChange={setSelectedNode} />}</div><aside className="details-panel"><div className="panel-heading"><div><h2>{selectedNode ? selectedNode.name : "Busiest service"}</h2><p>{selectedNode ? selectedNode.subtitle : busiestService?.unit === "req/min" ? "Highest request rate in the Services column" : "Highest traffic in the Services column"}</p></div></div>{selectedNode ? <div className="selected-detail"><div className="detail-type">{selectedNode.virtual ? "not a monitored entity" : selectedNode.kind}</div><strong>{formatNodeValue(selectedNode)}</strong><span>Selected timeframe</span>{selectedNode.virtual && <p className="virtual-note">No RUM application reaches these services, and no other service is known to call them - OTLP-only services are included because their callers cannot be checked. This stands in for their callers - browsers, API clients, batch jobs - and its rate is the services' own request rate. The map shows the top services only, so the bands drawn add up to less than the total.</p>}{!selectedNode.members && !selectedNode.processes && !selectedNode.virtual && <a className="entity-link" href={buildEntityLink(selectedNode.kind, selectedNode.entityId ?? selectedNode.id.replace(/^(rum|service|paas|infrastructure)-/, ""), timeframe)} target="_blank" rel="noopener noreferrer">Open {selectedNode.name} in Dynatrace<ExternalLinkIcon /></a>}{(() => {
       const service = serviceHealth.get(selectedNode.id);
       const host = hostHealth.get(selectedNode.id);
       const rum = rumHealth.get(selectedNode.id);
@@ -212,10 +215,27 @@ export const Home = () => {
         const ordered = [...members].sort((a, b) => (b.node.problems ?? 0) - (a.node.problems ?? 0) || (b.health?.cpuUsageMcore ?? 0) - (a.health?.cpuUsageMcore ?? 0) || a.node.name.localeCompare(b.node.name));
         const shown = ordered.slice(0, WORKLOAD_PODS_SHOWN);
         podList = <><hr /><span>Pods</span><div className="workload-pods">{shown.map(({ node, health }) => <div className="workload-pod" key={node.id}>
-          <i style={{ background: (node.problems ?? 0) > 0 ? "#c9143c" : "#16a36d" }} />
+          <StatusIcon problem={(node.problems ?? 0) > 0} />
           <a href={buildEntityLink("paas", node.entityId ?? node.name, timeframe)} target="_blank" rel="noopener noreferrer" title={node.name}>{node.name}</a>
           <b>{health ? formatMcore(health.cpuUsageMcore) : formatNodeValue(node)}</b>
         </div>)}{ordered.length > shown.length && <span className="workload-pods-more">+{ordered.length - shown.length} more pods</span>}</div></>;
+      } else if (selectedNode.processes) {
+        queryKey = "serviceProcess";
+        const processes = selectedNode.processes;
+        const hosts = new Set(processes.map((process) => process.host).filter(Boolean));
+        rows = [
+          { label: "Processes", value: `${processes.length}` },
+          { label: "Hosts", value: `${hosts.size}` },
+          { label: "With open problems", value: `${processes.filter((process) => process.problems > 0).length}`, critical: processes.some((process) => process.problems > 0) },
+        ];
+        // Problems first, then by host, so instances on the same machine sit together.
+        const ordered = [...processes].sort((a, b) => b.problems - a.problems || a.host.localeCompare(b.host) || a.name.localeCompare(b.name));
+        const shown = ordered.slice(0, WORKLOAD_PODS_SHOWN);
+        podList = <><hr /><span>Processes</span><div className="workload-pods">{shown.map((process) => <div className="workload-pod" key={process.id}>
+          <StatusIcon problem={process.problems > 0} />
+          <span className="workload-process-name" title={process.name}>{process.name}</span>
+          <b>{process.host || "—"}</b>
+        </div>)}{ordered.length > shown.length && <span className="workload-pods-more">+{ordered.length - shown.length} more processes</span>}</div></>;
       } else if (service) {
         rows = [
           { label: "Latency p50", value: formatLatency(service.p50Micros) },

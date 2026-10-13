@@ -33,7 +33,7 @@
 .metric-tile > button { padding: 0; border: 0; background: transparent; color: #16805b; cursor: pointer; font-size: 11px; text-align: left; }
 .metric-tile > button:hover { text-decoration: underline; }
 /* Outranks the generic `.metric-strip span` rule, which would otherwise force block/muted/12px. */
-.metric-value .metric-critical { display: inline; color: #c9143c; font-size: inherit; }
+.metric-value .metric-critical { display: inline; color: var(--status-problem); font-size: inherit; }
 .query-inspector { max-width: 1440px; margin: -4px auto 20px; border: 1px solid #7dd3fc; border-radius: 7px; background: #f8fcff; overflow: hidden; }
 .query-inspector-heading { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; border-bottom: 1px solid #bae6fd; color: #075985; }
 .query-inspector-heading strong, .query-inspector-heading span { display: block; }
@@ -50,7 +50,7 @@
 .panel-links button { padding: 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
 .panel-controls { display: flex; align-items: center; gap: 14px; flex-shrink: 0; }
 .live-indicator { display: flex; align-items: center; gap: 6px; color: #16805b; font-size: 11px; font-weight: 700; }
-.live-indicator i { width: 7px; height: 7px; border-radius: 50%; background: #16a36d; box-shadow: 0 0 0 4px #dcfce7; }
+.live-indicator i { width: 7px; height: 7px; border-radius: 50%; background: var(--status-ok); box-shadow: 0 0 0 4px #dcfce7; }
 .topology-shell { position: relative; min-height: 480px; padding: 22px 20px 16px; overflow-x: auto; }
 .topology-column-labels { position: absolute; top: 4px; left: 20px; width: 1000px; height: 20px; color: var(--dashboard-muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .7px; }
 .topology-column-labels span { position: absolute; width: 120px; text-align: center; }
@@ -59,18 +59,17 @@
 .topology-node:focus rect, .topology-node:hover rect { filter: drop-shadow(0 3px 5px rgb(15 23 42 / 14%)); }
 .topology-node-name { fill: var(--dashboard-ink); font-size: 10.5px; font-weight: 700; }
 .topology-edge-pipe { fill: none; stroke: #dbe4ec; stroke-linecap: round; }
-.topology-edge-flow { fill: none; stroke: #0ea5a4; stroke-linecap: round; stroke-dasharray: 9 15; animation: topology-flow 1.3s linear infinite; }
-.topology-edge-flow.is-active { stroke: #0284c7; }
+.topology-edge-flow { fill: none; stroke: var(--tier-service); stroke-linecap: round; stroke-dasharray: 9 15; animation: topology-flow 1.3s linear infinite; }
+.topology-edge-flow.is-active { stroke: var(--active); }
 /* Hosting edges carry the infrastructure colour, so the map reads "this host carries that load". */
-.topology-edge-flow.is-hosting { stroke: #f97316; }
-.topology-edge-flow.is-hosting.is-active { stroke: #0284c7; }
+.topology-edge-flow.is-hosting { stroke: var(--tier-infrastructure); }
+.topology-edge-flow.is-hosting.is-active { stroke: var(--active); }
 /* Offset equals one dash + one gap, so the loop restarts exactly where it began. */
 @keyframes topology-flow { to { stroke-dashoffset: -24; } }
 .topology-node-badge text { fill: #fff; font-size: 10px; font-weight: 700; }
 .workload-pods { display: flex; flex-direction: column; gap: 8px; width: 100%; }
-.workload-pod { display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
-.workload-pod i { width: 8px; height: 8px; border-radius: 50%; }
-.workload-pod a { overflow: hidden; color: var(--dashboard-ink); text-overflow: ellipsis; white-space: nowrap; }
+.workload-pod { display: grid; grid-template-columns: 12px 1fr auto; align-items: center; gap: 8px; font-size: 12px; }
+.workload-pod a, .workload-process-name { overflow: hidden; color: var(--dashboard-ink); text-overflow: ellipsis; white-space: nowrap; }
 .workload-pod b { color: var(--dashboard-muted); font-weight: 600; }
 .workload-pods-more { color: var(--dashboard-muted); font-size: 11px; }
 .topology-node-meta, .topology-edge-label { fill: var(--dashboard-muted); font-size: 10px; }
@@ -78,7 +77,6 @@
 .topology-overflow-label { fill: var(--dashboard-muted); font-size: 11px; font-style: italic; }
 .topology-legend { display: flex; justify-content: center; gap: 22px; margin-top: 12px; color: var(--dashboard-muted); font-size: 11px; }
 .topology-legend span { display: inline-flex; align-items: center; gap: 6px; }
-.topology-legend i { width: 8px; height: 8px; border-radius: 50%; }
 .topology-legend .legend-edge { width: 34px; height: 10px; }
 .topology-legend-divider { width: 1px; height: 12px; background: var(--dashboard-line); }
 .clear-selection { display: block; margin: 10px auto 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
@@ -100,7 +98,7 @@
 .health-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px 10px; width: 100%; margin: 4px 0 10px; }
 .health-grid span { display: block; color: var(--dashboard-muted); font-size: 11px; }
 .health-grid b { display: block; margin-top: 2px; color: var(--dashboard-ink); font-size: 15px; }
-.health-grid b.is-critical { color: #c9143c; }
+.health-grid b.is-critical { color: var(--status-problem); }
 .health-link { align-self: start; padding: 0; border: 0; background: transparent; color: #0369a1; cursor: pointer; font-size: 11px; }
 .health-link:hover { text-decoration: underline; }
 .connection-row { display: flex; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid #eef2f6; font-size: 12px; }
@@ -137,6 +135,11 @@
 .forecast-pending { margin: 6px 0 2px; color: var(--dashboard-muted); font-size: 12px; }
 .topology-band path { fill: none; stroke-opacity: 0.32; stroke-linecap: butt; transition: stroke-opacity 0.15s; }
 .topology-band:hover path, .topology-band.is-active path { stroke-opacity: 0.55; }
-.topology-node.is-virtual text { fill: #475569; }
+/* A rate carried over from the service rather than split out of the metric reads a shade lighter. */
+.topology-band.is-inferred path { stroke-opacity: 0.2; }
+.topology-node.is-virtual text { fill: var(--virtual-text); }
 .virtual-note { margin: 12px 0 0; color: var(--dashboard-muted); font-size: 12px; line-height: 1.5; }
 .topology-particle { pointer-events: none; opacity: 0.85; }
+/* A white rim keeps a failed particle legible on a band of any colour. */
+.topology-particle.is-failed { opacity: 1; stroke: #fff; stroke-width: 0.8; }
+.status-icon { flex: none; vertical-align: -1px; }

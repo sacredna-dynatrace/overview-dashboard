@@ -1,4 +1,6 @@
 import React, { useMemo, useState } from "react";
+import { ACTIVE, GRID, PROCESS_GROUP, STATUS, TIER as TIER_COLORS, VIRTUAL } from "../theme/colors";
+import { StatusIcon, StatusMark } from "./StatusMark";
 
 export type TopologyNode = {
   id: string;
@@ -18,8 +20,12 @@ export type TopologyNode = {
   problems?: number;
   /** `k8s.workload.name` of a pod, which is what the map groups pods by. */
   workload?: string;
+  /** Namespace of a pod or workload, for matching traffic whose cluster name differs. */
+  namespace?: string;
   /** Set on a workload node only: the pod node ids it stands for. */
   members?: string[];
+  /** Set on a process-group node only: its processes, which exist on the map only through it. */
+  processes?: { id: string; classicId: string; name: string; host: string; problems: number }[];
   /** A stand-in rather than an entity - the external callers of entry services without RUM. */
   virtual?: boolean;
 };
@@ -47,6 +53,13 @@ export type TopologyEdge = {
   kind: "call" | "hosting";
   /** Shown instead of the value when the source knows the relationship but not its volume. */
   label?: string;
+  /**
+   * Set when `value` is the service's whole rate, carried over because the service runs in exactly
+   * one place - inferred from the topology, not split out of the metric.
+   */
+  inferred?: boolean;
+  /** Failed requests per minute within `value`, on measured edges only. */
+  failures?: number;
 };
 
 type TopologyGraphProps = {
@@ -61,16 +74,16 @@ type TopologyGraphProps = {
 const NODE_WIDTH = 120;
 const NODE_HALF = NODE_WIDTH / 2;
 const columnX = { rum: 80, service: 360, paas: 640, infrastructure: 920 } as const;
-const columnLabels = { rum: "RUM applications", service: "Services", paas: "Kubernetes workloads", infrastructure: "Infrastructure" } as const;
-const colors = { rum: "#8b5cf6", service: "#0ea5a4", paas: "#2563eb", infrastructure: "#f97316" } as const;
+const columnLabels = { rum: "RUM applications", service: "Services", paas: "Workloads / processes", infrastructure: "Infrastructure" } as const;
+const colors = TIER_COLORS;
+/** Process groups share the workload column, so their outline is what tells the two apart. */
+const outline = (node: TopologyNode) => node.processes ? PROCESS_GROUP : colors[node.kind];
 /**
- * The dot inside a node reports health, not which column the node is in - the column is already
- * given by its position under a labelled heading and by the box outline, so the dot is free to
- * carry something the map could not otherwise show.
+ * The mark inside a node reports health, not which column the node is in - the column is already
+ * given by its position under a labelled heading and by the box outline, so the mark is free to
+ * carry something the map could not otherwise show. Its shape carries it too (`StatusMark`).
  */
-const healthColors = { ok: "#16a36d", problem: "#c9143c" } as const;
-/** Grey and dashed: the external-callers node is drawn so nobody mistakes it for a monitored entity. */
-const VIRTUAL_COLOR = "#94a3b8";
+const VIRTUAL_COLOR = VIRTUAL.stroke;
 /**
  * Band widths. Request rates across services span several orders of magnitude, so width follows
  * the square root of the rate - linear made every band but the busiest one a hairline.
@@ -138,13 +151,14 @@ const formatValue = (value: number, unit: string) => {
   if (unit === "B/s") return formatThroughput(value);
   if (unit === "containers") return value > 0 ? `${value} container${value === 1 ? "" : "s"}` : "— containers";
   if (unit === "pods") return `${value} pod${value === 1 ? "" : "s"}`;
+  if (unit === "processes") return `${value} process${value === 1 ? "" : "es"}`;
   return `${formatNumber(value)} ${unit}`;
 };
 export const formatNodeValue = (node: TopologyNode) => formatValue(node.value, node.unit);
 /** Only a measured request rate is drawn as a Sankey band; everything else is a relationship. */
 export const isMeasured = (edge: TopologyEdge) => edge.unit === "req/min" && edge.value > 0;
 export const formatEdgeValue = (edge: TopologyEdge) => isMeasured(edge)
-  ? `${formatValue(edge.value, edge.unit)}${edge.label ? ` · ${edge.label}` : ""}`
+  ? `${formatValue(edge.value, edge.unit)}${edge.label ? ` · ${edge.label}` : ""}${edge.inferred ? " · inferred: single placement" : ""}`
   : edge.label ?? formatValue(edge.value, edge.unit);
 
 export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: TopologyGraphProps) => {
@@ -419,7 +433,8 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
    * with a rate (`isMeasured`) for the same reason.
    */
   const EDGE_WIDTH = 3;
-  const describeEdge = (edge: TopologyEdge) => `${nodesById.get(edge.source)?.name ?? edge.source} → ${nodesById.get(edge.target)?.name ?? edge.target}: ${formatEdgeValue(edge)}`;
+  const failedShare = (edge: TopologyEdge) => edge.failures !== undefined && edge.value > 0 ? ` · ${((edge.failures / edge.value) * 100).toFixed(2)}% failed` : "";
+  const describeEdge = (edge: TopologyEdge) => `${nodesById.get(edge.source)?.name ?? edge.source} → ${nodesById.get(edge.target)?.name ?? edge.target}: ${formatEdgeValue(edge)}${failedShare(edge)}`;
 
   /**
    * An edge between neighbouring columns can run straight across, but one that skips a column - a
@@ -450,15 +465,15 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
       </div>
       <svg className="topology-canvas" style={{ height: canvasHeight }} viewBox={`0 0 ${CANVAS_WIDTH} ${canvasHeight}`} role="img" aria-label="Application, service, Kubernetes and infrastructure topology">
         <defs>
-          <pattern id="topology-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill="#cbd5e1" opacity="0.42" /></pattern>
+          <pattern id="topology-grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.2" fill={GRID} opacity="0.42" /></pattern>
           {/*
             markerUnits defaults to strokeWidth, which multiplied the arrowhead by the line weight -
             a busy edge at strokeWidth 8.5 rendered a ~68px triangle. userSpaceOnUse pins it to a
             constant size, so the head stays the same no matter how heavy the edge is.
             Markers do not inherit the referencing path's stroke, hence one per state.
           */}
-          <marker id="topology-arrow" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="16" refX="18" refY="8" orient="auto"><path d="M0,1.5 L18,8 L0,14.5 Z" fill="#0ea5a4" /></marker>
-          <marker id="topology-arrow-active" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="16" refX="18" refY="8" orient="auto"><path d="M0,1.5 L18,8 L0,14.5 Z" fill="#0284c7" /></marker>
+          <marker id="topology-arrow" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="16" refX="18" refY="8" orient="auto"><path d="M0,1.5 L18,8 L0,14.5 Z" fill={colors.service} /></marker>
+          <marker id="topology-arrow-active" markerUnits="userSpaceOnUse" markerWidth="20" markerHeight="16" refX="18" refY="8" orient="auto"><path d="M0,1.5 L18,8 L0,14.5 Z" fill={ACTIVE} /></marker>
         </defs>
         <rect width={CANVAS_WIDTH} height={canvasHeight} fill="url(#topology-grid)" />
         {drawnEdges.map((edge) => {
@@ -475,16 +490,24 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
             const sourceY = bands.centreOf(edge.source) + offset.source;
             const targetY = bands.centreOf(edge.target) + offset.target;
             const count = Math.max(1, Math.round(particlesFor(edge.value) * particleScale));
+            /**
+             * The failed share of the particles, rounded to whole particles - so a band with a
+             * fraction of a percent failing shows none, and the tooltip carries the exact rate.
+             * Spread evenly rather than bunched, so the red reads as a proportion of the stream.
+             */
+            const failedCount = Math.round(count * Math.min(1, (edge.failures ?? 0) / edge.value));
+            const isFailed = (index: number) => Math.floor(((index + 1) * failedCount) / count) > Math.floor((index * failedCount) / count);
             // Wide bands get three lanes so the particles fill the band instead of riding its centre line.
             const lanes = band >= 10 ? [-band / 4, 0, band / 4] : [0];
             const seconds = (Math.hypot(target.x - source.x - NODE_WIDTH, targetY - sourceY) * 1.1) / PARTICLE_SPEED;
-            return <g key={edge.id} className={`topology-band${active ? " is-active" : ""}`} opacity={selectedId && !active ? 0.55 : 1}>
+            return <g key={edge.id} className={`topology-band${active ? " is-active" : ""}${edge.inferred ? " is-inferred" : ""}`} opacity={selectedId && !active ? 0.55 : 1}>
               <path d={geometry.path} stroke={colour} strokeWidth={band} />
               {Array.from({ length: count }, (_, index) => {
                 const lane = lanes[index % lanes.length];
                 const route = edgeGeometry({ x: source.x, y: sourceY + lane }, { x: target.x, y: targetY + lane }).path;
                 // Negative begin spreads the particles along the band from the first frame.
-                return <circle key={index} className="topology-particle" r={Math.min(3.2, Math.max(1.6, band * 0.18))} fill={colour}>
+                const failed = isFailed(index);
+                return <circle key={index} className={`topology-particle${failed ? " is-failed" : ""}`} r={Math.min(3.2, Math.max(1.6, band * 0.18)) + (failed ? 0.6 : 0)} fill={failed ? STATUS.problem : colour}>
                   <animateMotion dur={`${seconds.toFixed(2)}s`} begin={`-${((index * seconds) / count).toFixed(2)}s`} repeatCount="indefinite" path={route} />
                 </circle>;
               })}
@@ -517,7 +540,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
           const onKey = (event: React.KeyboardEvent) => { if (event.key === "Enter" || event.key === " ") selectNode(node); };
           // No health dot: there is no entity behind it to have a problem.
           if (node.virtual) return <g key={node.id} className="topology-node is-virtual" role="button" tabIndex={0} aria-label={`${node.name}, ${formatNodeValue(node)}, not a monitored entity`} onClick={select} onKeyDown={onKey}>
-            <rect x={position.x - NODE_HALF} y={position.y - NODE_HEIGHT / 2} width={NODE_WIDTH} height={bands.heightOf(node.id)} rx="8" fill="#f8fafc" stroke={selected ? "#0284c7" : VIRTUAL_COLOR} strokeWidth={selected ? 3 : 1.5} strokeDasharray="5 4" />
+            <rect x={position.x - NODE_HALF} y={position.y - NODE_HEIGHT / 2} width={NODE_WIDTH} height={bands.heightOf(node.id)} rx="8" fill={VIRTUAL.fill} stroke={selected ? ACTIVE : VIRTUAL_COLOR} strokeWidth={selected ? 3 : 1.5} strokeDasharray="5 4" />
             <title>{`${node.name} - ${node.subtitle}. Stands in for whatever calls these services; not a monitored entity.`}</title>
             <text x={position.x - NODE_HALF + 12} y={position.y - 9} className="topology-node-name">{node.name}</text>
             {(() => {
@@ -530,15 +553,15 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
               </>;
             })()}
           </g>;
-          return <g key={node.id} className="topology-node" role="button" tabIndex={0} aria-label={`${node.name}, ${formatNodeValue(node)}${problems > 0 ? `, ${problems} open problems` : ", no open problems"}`} onClick={() => selectNode(node)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") selectNode(node); }}><rect x={position.x - NODE_HALF} y={position.y - 29} width={NODE_WIDTH} height="58" rx="8" fill="white" stroke={selected ? "#0284c7" : colors[node.kind]} strokeWidth={selected ? 3 : 1.5} /><circle cx={position.x - NODE_HALF + 16} cy={position.y} r="6.5" fill={problems > 0 ? healthColors.problem : healthColors.ok} /><title>{problems > 0 ? `${node.name} - ${problems} open problem${problems === 1 ? "" : "s"}` : node.name}</title><text x={position.x - NODE_HALF + 28} y={position.y - 4} className="topology-node-name">{node.name.length > 14 ? `${node.name.slice(0, 13)}…` : node.name}</text><text x={position.x - NODE_HALF + 28} y={position.y + 14} className="topology-node-meta">{formatNodeValue(node)}</text>{node.members && <g className="topology-node-badge"><rect x={position.x + NODE_HALF - 38} y={position.y - 38} width="34" height="18" rx="9" fill={colors[node.kind]} /><text x={position.x + NODE_HALF - 21} y={position.y - 25} textAnchor="middle">×{node.members.length}</text></g>}</g>;
+          return <g key={node.id} className="topology-node" role="button" tabIndex={0} aria-label={`${node.name}, ${formatNodeValue(node)}${problems > 0 ? `, ${problems} open problems` : ", no open problems"}`} onClick={() => selectNode(node)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") selectNode(node); }}><rect x={position.x - NODE_HALF} y={position.y - 29} width={NODE_WIDTH} height="58" rx="8" fill="white" stroke={selected ? ACTIVE : outline(node)} strokeWidth={selected ? 3 : 1.5} /><StatusMark x={position.x - NODE_HALF + 16} y={position.y} problem={problems > 0} /><title>{problems > 0 ? `${node.name} - ${problems} open problem${problems === 1 ? "" : "s"}` : node.name}</title><text x={position.x - NODE_HALF + 28} y={position.y - 4} className="topology-node-name">{node.name.length > 14 ? `${node.name.slice(0, 13)}…` : node.name}</text><text x={position.x - NODE_HALF + 28} y={position.y + 14} className="topology-node-meta">{formatNodeValue(node)}</text>{(node.members ?? node.processes) && <g className="topology-node-badge"><rect x={position.x + NODE_HALF - 38} y={position.y - 38} width="34" height="18" rx="9" fill={outline(node)} /><text x={position.x + NODE_HALF - 21} y={position.y - 25} textAnchor="middle">×{(node.members ?? node.processes)?.length}</text></g>}</g>;
         })}
       </svg>
       {/* Edge swatches reuse the node palette so the legend cannot drift from the CSS. */}
       <div className="topology-legend">
         {/* The column swatches this replaces were redundant - each column is labelled directly
             above it - and a coloured dot in the legend now has to mean what a node's dot means. */}
-        <span><i style={{ background: healthColors.ok }} /> No open problems</span>
-        <span><i style={{ background: healthColors.problem }} /> Has open problems</span>
+        <span><StatusIcon problem={false} /> No open problems</span>
+        <span><StatusIcon problem /> Has open problems</span>
         <span className="topology-legend-divider" aria-hidden="true" />
         <span>
           <svg className="legend-edge" viewBox="0 0 34 10" aria-hidden="true">
@@ -548,7 +571,15 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
         </span>
         <span>
           <svg className="legend-edge" viewBox="0 0 34 10" aria-hidden="true">
-            <rect x="1" y="1" width="32" height="8" rx="2" fill="#f8fafc" stroke={VIRTUAL_COLOR} strokeDasharray="3 2" />
+            <path d="M1,5 H33" stroke={colors.service} strokeOpacity="0.4" strokeWidth="8" fill="none" />
+            <circle cx="10" cy="5" r="2.4" fill={colors.service} />
+            <circle cx="22" cy="5" r="3" fill={STATUS.problem} className="topology-particle is-failed" />
+          </svg>
+          Failed requests
+        </span>
+        <span>
+          <svg className="legend-edge" viewBox="0 0 34 10" aria-hidden="true">
+            <rect x="1" y="1" width="32" height="8" rx="2" fill={VIRTUAL.fill} stroke={VIRTUAL_COLOR} strokeDasharray="3 2" />
           </svg>
           External callers (no RUM)
         </span>

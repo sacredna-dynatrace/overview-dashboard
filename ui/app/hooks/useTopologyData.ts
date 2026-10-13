@@ -6,7 +6,7 @@ import type { TopologyEdge, TopologyNode, TopologySort } from "../components/Top
 
 type DqlRecord = Record<string, unknown>;
 type TopologyData = { nodes: TopologyNode[]; edges: TopologyEdge[] };
-export type TopologyQueryKey = "rum" | "service" | "infrastructure" | "problems" | "serviceHost" | "pods" | "podInventory" | "podHost" | "podHealth" | "rumService" | "serviceHealth" | "hostHealth" | "rumHealth" | "rumErrors" | "affectedEntities" | "serviceWorkload" | "entryServices";
+export type TopologyQueryKey = "rum" | "service" | "infrastructure" | "problems" | "serviceProcess" | "pods" | "podInventory" | "podHost" | "podHealth" | "rumService" | "serviceHealth" | "hostHealth" | "rumHealth" | "rumErrors" | "affectedEntities" | "serviceWorkload" | "entryServices" | "serviceProcessTraffic";
 export type TopologyQueries = Record<TopologyQueryKey, string>;
 /** A query that came back with exactly this many records was almost certainly cut off. */
 export type TopologyTruncation = { key: TopologyQueryKey; count: number; cap: number };
@@ -228,7 +228,7 @@ const EDGE_LIMIT = 5000;
  * handful of short fields, so 5000 of them is a few hundred KB against a 50 MB ceiling.
  */
 const QUERY_CAPS: Record<TopologyQueryKey, number> = {
-  rumService: EDGE_LIMIT, pods: EDGE_LIMIT, podHost: EDGE_LIMIT, serviceHost: EDGE_LIMIT,
+  rumService: EDGE_LIMIT, pods: EDGE_LIMIT, podHost: EDGE_LIMIT, serviceProcess: EDGE_LIMIT, serviceProcessTraffic: EDGE_LIMIT,
   rum: QUERY_LIMITS.maxResultRecords, service: QUERY_LIMITS.maxResultRecords,
   infrastructure: QUERY_LIMITS.maxResultRecords, problems: QUERY_LIMITS.maxResultRecords,
   podInventory: QUERY_LIMITS.maxResultRecords, podHealth: QUERY_LIMITS.maxResultRecords,
@@ -390,31 +390,95 @@ ${podUtilizationLookup("memory_requests_bytes", "dt.kubernetes.container.request
 ${podUtilizationLookup("memory_limits_bytes", "dt.kubernetes.container.limits_memory", timeframe)}`;
 
 /**
- * How much network traffic each service moves on the host running it, in bytes.
+ * Which process each service runs in, and which host carries that process - the placement for
+ * services outside Kubernetes.
  *
- * Bytes rather than a request count, because a service does not "call" its host - counting requests
- * on this edge invited exactly that reading, and duplicated a number the service node already
- * shows. Traffic volume is a property of the placement, so it says something the node does not.
+ * Read from Smartscape: `SERVICE runs_on PROCESS` and `PROCESS runs_on HOST` (both verified on the
+ * reference tenant). This replaced a query that tied services to hosts through
+ * `dt.process.network.bytes_*`; it only produced an edge where that metric was non-zero, so on a
+ * tenant whose hosts did not report it a VM-hosted service had no host at all.
  *
- * Spans carry no payload sizes here, so the bytes come from the process metrics and are tied back
- * to a service through the process group instance, which spans do carry. Sanity-checked against
- * `dt.host.net.nic.bytes_*`: every process on a host sums to less than that host's NIC total, as
- * it must.
+ * The PROCESS node carries its process group, which is what the map groups by, and `id_classic`
+ * (`PROCESS_GROUP_INSTANCE-…`), which is what problems name. Smartscape HOST ids equal the classic
+ * ones, so hosts join the infrastructure column directly.
  *
- * Caveat: the process metric covers everything its processes send, not only this service's share.
- * Where one process group instance serves several services, each gets attributed the same bytes.
+ * Smartscape alone misses services: an embedded database service (`[embedded]`, a
+ * `DATABASE_SERVICE` inside the Spring Boot process) had no Smartscape edge of any kind, while the
+ * classic model still had its `runs_on` process. So the classic `runs_on` is read too, mapped to
+ * Smartscape PROCESS ids through `id_classic`, and appended to the Smartscape edges. Dropping the
+ * old network-bytes query without this lost that service's only connection.
+ *
+ * Each process is also followed to its pod (`PROCESS runs_on CONTAINER`, `CONTAINER is_part_of
+ * K8S_POD`), so a service running inside a pod is placed on that pod's workload rather than on a
+ * process group that would draw the same process a second time.
+ *
+ * Ordered by the service's request count before the cap, so a truncated result loses the quiet
+ * services rather than whichever sort last alphabetically.
  */
-const serviceHostQuery = (timeframe: ResolvedTimeframe) => `timeseries { rx = sum(dt.process.network.bytes_rx, default: 0, scalar: true), tx = sum(dt.process.network.bytes_tx, default: 0, scalar: true) }, by: { dt.entity.process_group_instance, dt.entity.host }, ${timeWindow(timeframe)}
-| join [
-    fetch dt.entity.service
-    | fields svc = id, service_name = entity.name, pgis = runs_on[dt.entity.process_group_instance]
-    | filter isNotNull(pgis)
-    | expand dt.entity.process_group_instance = pgis
-  ], on: { dt.entity.process_group_instance }, fields: { svc, service_name }
-| filter isNotNull(svc)
-| summarize bytes = sum(rx + tx), by: { service_id = svc, service_name, host_id = dt.entity.host }
-| fieldsAdd host_name = entityName(host_id, type: "dt.entity.host")
-| sort bytes desc
+const serviceProcessQuery = (timeframe: ResolvedTimeframe) => `fetch dt.entity.service, ${timeWindow(timeframe)}
+| fields service_id = id, pgi = runs_on[dt.entity.process_group_instance]
+| expand pgi
+| filter isNotNull(pgi)
+| fields service_id = toString(service_id), process_classic = toString(pgi)
+| lookup [
+    smartscapeNodes PROCESS, ${timeWindow(timeframe)}
+    | fields process_classic = id_classic, process_id = toString(id)
+  ], sourceField: process_classic, lookupField: process_classic, fields: { process_id }
+| fields service_id, process_id
+| append [
+    smartscapeEdges runs_on, ${timeWindow(timeframe)}
+    | filter source_type == "SERVICE" and target_type == "PROCESS"
+    | fields service_id = toString(source_id), process_id = toString(target_id)
+  ]
+| filter isNotNull(process_id)
+| dedup { service_id, process_id }
+| lookup [
+    smartscapeNodes SERVICE, ${timeWindow(timeframe)}
+    | fields service_id = toString(id), service_name = name
+  ], sourceField: service_id, lookupField: service_id, fields: { service_name }
+| lookup [
+    smartscapeNodes PROCESS, ${timeWindow(timeframe)}
+    | fields process_id = toString(id), process = name, process_classic = id_classic, pg_id = dt.process_group.id, pg_name = dt.process_group.detected_name, host_name = host.name
+  ], sourceField: process_id, lookupField: process_id, fields: { process, process_classic, pg_id, pg_name, host_name }
+| filter isNotNull(pg_id)
+| lookup [
+    smartscapeEdges runs_on, ${timeWindow(timeframe)}
+    | filter source_type == "PROCESS" and target_type == "HOST"
+    | fields process_id = toString(source_id), host_id = toString(target_id)
+  ], sourceField: process_id, lookupField: process_id, fields: { host_id }
+| lookup [
+    smartscapeEdges runs_on, ${timeWindow(timeframe)}
+    | filter source_type == "PROCESS" and target_type == "CONTAINER"
+    | fields process_id = toString(source_id), container_id = toString(target_id)
+  ], sourceField: process_id, lookupField: process_id, fields: { container_id }
+| lookup [
+    smartscapeEdges is_part_of, ${timeWindow(timeframe)}
+    | filter source_type == "CONTAINER" and target_type == "K8S_POD"
+    | fields container_id = toString(source_id), pod_id = toString(target_id)
+  ], sourceField: container_id, lookupField: container_id, fields: { pod_id }
+| lookup [
+    smartscapeNodes K8S_POD, ${timeWindow(timeframe)}
+    | fields pod_id = toString(id), pod = name
+  ], sourceField: pod_id, lookupField: pod_id, fields: { pod }
+| lookup [
+    timeseries r = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service }, ${timeWindow(timeframe)}
+    | fields service_id = toString(dt.entity.service), r
+  ], sourceField: service_id, lookupField: service_id, fields: { r }
+| sort r desc
+| limit ${EDGE_LIMIT}`;
+
+/**
+ * Requests per service per process group, for the bands into process-group nodes.
+ *
+ * `dt.service.request.count` carries `dt.process_group.id` (verified). Requests that also carry a
+ * Kubernetes workload (by name or by its classic `dt.entity.cloud_application`) are left out: those are already drawn on the workload band, and counting them
+ * again here would double the service's outflow. Split by `failed` for the same reason as
+ * `serviceWorkloadQuery`.
+ */
+const serviceProcessTrafficQuery = (timeframe: ResolvedTimeframe) => `timeseries requests = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service, dt.process_group.id, k8s.workload.name, dt.entity.cloud_application, failed }, ${timeWindow(timeframe)}
+| filter isNotNull(dt.process_group.id) and isNull(k8s.workload.name) and isNull(dt.entity.cloud_application) and requests > 0
+| fields service_id = dt.entity.service, pg_id = dt.process_group.id, failed, requests
+| sort requests desc
 | limit ${EDGE_LIMIT}`;
 
 /**
@@ -440,10 +504,22 @@ const problemsQuery = (timeframe: ResolvedTimeframe) => `fetch dt.davis.problems
  * cluster and namespace, so this is a metric read, not the span scan the notes warn about. Services
  * outside Kubernetes have no workload dimension and drop out here, which is correct - they have no
  * workload edge to weight.
+ *
+ * Split by the metric's own `failed` dimension as well, so each edge carries its own failure count
+ * rather than borrowing the service-wide rate. Splitting rather than a second filtered metric in the
+ * same block: a multi-metric `timeseries` intersects, and an edge with no failures would drop out.
+ *
+ * Not every tenant puts `k8s.workload.name` and `k8s.cluster.name` on this metric. One had only
+ * `k8s.namespace.name` plus the classic `dt.entity.cloud_application` (the Deployment) and
+ * `dt.entity.kubernetes_cluster`, so every request was filtered out and a service that plainly ran
+ * in a workload got a relationship line instead of a band. The classic entities' names are the
+ * fallback; on the reference tenant they equal the `k8s.*` values exactly.
  */
-const serviceWorkloadQuery = (timeframe: ResolvedTimeframe) => `timeseries requests = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service, k8s.cluster.name, k8s.namespace.name, k8s.workload.name }, ${timeWindow(timeframe)}
-| filter isNotNull(k8s.workload.name) and requests > 0
-| fields service_id = dt.entity.service, cluster = k8s.cluster.name, namespace = k8s.namespace.name, workload = k8s.workload.name, requests
+const serviceWorkloadQuery = (timeframe: ResolvedTimeframe) => `timeseries requests = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service, k8s.cluster.name, k8s.namespace.name, k8s.workload.name, dt.entity.cloud_application, dt.entity.kubernetes_cluster, failed }, ${timeWindow(timeframe)}
+| fieldsAdd workload = coalesce(k8s.workload.name, entityName(dt.entity.cloud_application, type: "dt.entity.cloud_application"))
+| fieldsAdd cluster = coalesce(k8s.cluster.name, entityName(dt.entity.kubernetes_cluster, type: "dt.entity.kubernetes_cluster"))
+| filter isNotNull(workload) and requests > 0
+| fields service_id = dt.entity.service, cluster, namespace = k8s.namespace.name, workload, failed, requests
 | sort requests desc
 | limit ${EDGE_LIMIT}`;
 
@@ -526,7 +602,7 @@ const groupPodsByWorkload = ({ nodes, edges }: TopologyData): TopologyData => {
       group.value += 1;
       group.problems = (group.problems ?? 0) + (node.problems ?? 0);
     } else {
-      const created: TopologyNode = { id, name: node.workload, kind: "paas", subtitle: node.subtitle, value: 1, unit: "pods", problems: node.problems ?? 0, workload: node.workload, members: [node.id] };
+      const created: TopologyNode = { id, name: node.workload, kind: "paas", subtitle: node.subtitle, value: 1, unit: "pods", problems: node.problems ?? 0, workload: node.workload, namespace: node.namespace, members: [node.id] };
       groups.set(id, created);
       mapped.push(created);
     }
@@ -550,24 +626,131 @@ const groupPodsByWorkload = ({ nodes, edges }: TopologyData): TopologyData => {
 };
 
 /**
- * Puts the measured service-to-workload request rates onto the map's edges.
+ * Puts the measured service-to-workload and service-to-process-group request rates onto the map's edges.
  *
  * The rate replaces the zero on the Smartscape edge, or adds the edge when Smartscape missed it but
  * the metric shows traffic. Only edges carrying `req/min` are drawn as Sankey bands, so these are
  * the bands that come from data rather than from a relationship alone.
  */
-const addMeasuredTraffic = ({ nodes, edges }: TopologyData, flows: { serviceId: string; workloadId: string; perMinute: number }[]): TopologyData => {
+const addMeasuredTraffic = ({ nodes, edges }: TopologyData, flows: { serviceId: string; targetId: string; perMinute: number; failed: boolean }[]): TopologyData => {
   const known = new Set(nodes.map((node) => node.id));
   const byId = new Map(edges.map((edge) => [edge.id, edge] as const));
-  for (const { serviceId, workloadId, perMinute } of flows) {
-    if (!known.has(serviceId) || !known.has(workloadId)) continue;
-    const id = `hosting:${serviceId}->${workloadId}`;
+  for (const { serviceId, targetId, perMinute, failed } of flows) {
+    if (!known.has(serviceId) || !known.has(targetId)) continue;
+    const id = `hosting:${serviceId}->${targetId}`;
     const existing = byId.get(id);
+    // The failed and successful rows of one edge arrive separately and are summed here.
+    const failures = failed ? perMinute : 0;
     byId.set(id, existing
-      ? { ...existing, value: (existing.unit === "req/min" ? existing.value : 0) + perMinute, unit: "req/min" }
-      : { id, source: serviceId, target: workloadId, value: perMinute, unit: "req/min", kind: "hosting" });
+      ? { ...existing, value: (existing.unit === "req/min" ? existing.value : 0) + perMinute, unit: "req/min", failures: (existing.failures ?? 0) + failures }
+      : { id, source: serviceId, target: targetId, value: perMinute, unit: "req/min", kind: "hosting", failures });
   }
   return { nodes, edges: [...byId.values()] };
+};
+
+/**
+ * Process-group nodes for services that run outside Kubernetes.
+ *
+ * The third column is "where the service runs": a Kubernetes workload when there is one, otherwise
+ * the process group. A service that already reaches a workload (by Smartscape or by measured
+ * traffic) is skipped - Kubernetes services also have `SERVICE runs_on PROCESS`, and drawing both
+ * would place the same service twice. Process groups exist only on the map, so the pod tile is
+ * unaffected.
+ */
+const addProcessGroups = ({ nodes, edges }: TopologyData, placements: DqlRecord[], onWorkload: Set<string>, problemsByEntity: Map<string, number>): TopologyData => {
+  const byId = new Map(nodes.map((node) => [node.id, node] as const));
+  const placed = new Set([...onWorkload, ...edges.filter((edge) => edge.source.startsWith("service-") && byId.get(edge.target)?.kind === "paas").map((edge) => edge.source)]);
+  const existing = new Set(edges.map((edge) => edge.id));
+  const workloadOf = new Map(nodes.flatMap((node) => (node.members ?? []).map((member) => [member, node.id] as const)));
+  const added = new Map<string, TopologyNode>();
+  const edgeProcesses = new Map<string, { edge: TopologyEdge; processes: Set<string>; noun: string }>();
+  const link = (source: string, target: string, member: string, noun: string) => {
+    const id = `hosting:${source}->${target}`;
+    if (existing.has(id)) return;
+    const entry = edgeProcesses.get(id) ?? { edge: { id, source, target, value: 0, unit: "", kind: "hosting" }, processes: new Set<string>(), noun };
+    entry.processes.add(member);
+    edgeProcesses.set(id, entry);
+  };
+  const ensureService = (serviceId: string, record: DqlRecord) => {
+    if (byId.has(serviceId)) return;
+    const service: TopologyNode = { id: serviceId, name: text(record, "service_name") || serviceId, kind: "service", subtitle: "Service", value: 0, unit: "req/min" };
+    byId.set(serviceId, service);
+    added.set(serviceId, service);
+  };
+  for (const record of placements) {
+    const serviceId = `service-${text(record, "service_id")}`;
+    const pgId = text(record, "pg_id");
+    const processId = text(record, "process_id");
+    if (!processId) continue;
+    // Inside a pod the map already draws: the workload is where this service runs.
+    const pod = text(record, "pod");
+    const podNode = pod ? `paas-${pod}` : "";
+    const onPod = podNode ? workloadOf.get(podNode) ?? (byId.has(podNode) ? podNode : undefined) : undefined;
+    if (onPod) {
+      ensureService(serviceId, record);
+      link(serviceId, onPod, podNode, "pod");
+      continue;
+    }
+    if (!pgId || placed.has(serviceId)) continue;
+    ensureService(serviceId, record);
+    const id = `process-group-${pgId}`;
+    const classic = text(record, "process_classic");
+    let group = byId.get(id);
+    if (!group) {
+      group = { id, name: text(record, "pg_name") || pgId, kind: "paas", subtitle: "Process group", value: 0, unit: "processes", entityId: pgId, processes: [], problems: problemsByEntity.get(pgId) ?? 0 };
+      byId.set(id, group);
+      added.set(id, group);
+    }
+    if (!group.processes?.some((process) => process.id === processId)) {
+      const problems = problemsByEntity.get(classic) ?? 0;
+      group.processes?.push({ id: processId, classicId: classic, name: text(record, "process") || processId, host: text(record, "host_name"), problems });
+      group.value += 1;
+      group.problems = (group.problems ?? 0) + problems;
+    }
+    link(serviceId, id, processId, "process");
+    const hostId = text(record, "host_id");
+    if (hostId) {
+      const host = `infrastructure-${hostId}`;
+      if (!byId.has(host)) {
+        const node: TopologyNode = { id: host, name: text(record, "host_name") || hostId, kind: "infrastructure", subtitle: "Host", value: 0, unit: "% CPU", problems: problemsByEntity.get(hostId) ?? 0 };
+        byId.set(host, node);
+        added.set(host, node);
+      }
+      link(id, host, processId, "process");
+    }
+  }
+  const newEdges = [...edgeProcesses.values()].map(({ edge, processes, noun }) => ({ ...edge, label: `${processes.size} ${noun}${processes.size === 1 ? "" : noun === "process" ? "es" : "s"}` }));
+  return { nodes: [...nodes, ...added.values()], edges: [...edges, ...newEdges] };
+};
+
+/**
+ * A band for a service that runs in exactly one place, when the metric cannot say so itself.
+ *
+ * The placement bands split `dt.service.request.count` by workload or process group, but that
+ * metric does not always carry either: one tenant's VM-hosted Spring Boot service had only the
+ * service, `failed`, endpoint and status code, so its one process group got a bare relationship
+ * line. When a service has a single placement, every request it served was served there, so the
+ * service's own rate is that edge's rate - an inference from the topology rather than a split of
+ * the metric, which is why the edge says so (`inferred`). A service with two or more placements
+ * is left alone: there is nothing to divide its rate by.
+ */
+const inferSinglePlacement = ({ nodes, edges }: TopologyData, failureRates: Map<string, number>): TopologyData => {
+  const byId = new Map(nodes.map((node) => [node.id, node] as const));
+  const placements = new Map<string, TopologyEdge[]>();
+  for (const edge of edges) {
+    if (!edge.source.startsWith("service-") || byId.get(edge.target)?.kind !== "paas") continue;
+    const list = placements.get(edge.source);
+    if (list) list.push(edge); else placements.set(edge.source, [edge]);
+  }
+  const inferred = new Map<string, TopologyEdge>();
+  for (const [serviceId, list] of placements) {
+    const service = byId.get(serviceId);
+    if (list.length !== 1 || !service || service.unit !== "req/min" || service.value <= 0) continue;
+    const [edge] = list;
+    if (edge.unit === "req/min" && edge.value > 0) continue;
+    inferred.set(edge.id, { ...edge, value: service.value, unit: "req/min", failures: service.value * (failureRates.get(serviceId) ?? 0), inferred: true });
+  }
+  return inferred.size === 0 ? { nodes, edges } : { nodes, edges: edges.map((edge) => inferred.get(edge.id) ?? edge) };
 };
 
 /** Id of the stand-in for callers the dashboard cannot see. Never an entity, never counted. */
@@ -588,7 +771,7 @@ export const EXTERNAL_CALLERS_ID = "rum-external-callers";
  * counts once the callers query has actually answered - while it is loading or after it failed,
  * every service would look unknown and the whole column would be wired to this node.
  */
-const addExternalCallers = ({ nodes, edges }: TopologyData, callers: Map<string, number> | null): TopologyData => {
+const addExternalCallers = ({ nodes, edges }: TopologyData, callers: Map<string, number> | null, failureRates: Map<string, number>): TopologyData => {
   if (!callers) return { nodes, edges };
   const reachedByRum = new Set(edges.filter((edge) => edge.source.startsWith("rum-")).map((edge) => edge.target));
   const entries = nodes.filter((node) => node.kind === "service" && node.unit === "req/min" && node.value > 0
@@ -603,6 +786,8 @@ const addExternalCallers = ({ nodes, edges }: TopologyData, callers: Map<string,
     edges: [...edges, ...entries.map((node): TopologyEdge => ({
       id: `${EXTERNAL_CALLERS_ID}-${node.id}`, source: EXTERNAL_CALLERS_ID, target: node.id, value: node.value, unit: "req/min", kind: "call",
       label: callers.has(entityIdOf(node.id)) ? undefined : "callers unknown (OTLP)",
+      // Everything an entry service receives comes over this edge, so its failure rate is the edge's.
+      failures: node.value * (failureRates.get(node.id) ?? 0),
     }))],
   };
 };
@@ -628,7 +813,8 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
     service: serviceQuery(resolved, order),
     infrastructure: infrastructureQuery(resolved, order),
     problems: problemsQuery(resolved),
-    serviceHost: serviceHostQuery(resolved),
+    serviceProcess: serviceProcessQuery(resolved),
+    serviceProcessTraffic: serviceProcessTrafficQuery(resolved),
     pods: podsQuery(resolved),
     podInventory: podInventoryQuery(resolved, order),
     podHost: podHostQuery(resolved),
@@ -646,7 +832,8 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
   const service = useDql({ query: queries.service, ...QUERY_LIMITS });
   const infrastructure = useDql({ query: queries.infrastructure, ...QUERY_LIMITS });
   const problems = useDql({ query: queries.problems, ...QUERY_LIMITS });
-  const serviceHost = useDql({ query: queries.serviceHost, ...QUERY_LIMITS });
+  const serviceProcess = useDql({ query: queries.serviceProcess, ...QUERY_LIMITS });
+  const serviceProcessTraffic = useDql({ query: queries.serviceProcessTraffic, ...QUERY_LIMITS });
   const pods = useDql({ query: queries.pods, ...QUERY_LIMITS });
   const podInventory = useDql({ query: queries.podInventory, ...QUERY_LIMITS });
   const podHost = useDql({ query: queries.podHost, ...QUERY_LIMITS });
@@ -747,6 +934,7 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
         value: numeric(record, "containers"),
         unit: "containers",
         workload: text(record, "workload") || undefined,
+        namespace: namespace || undefined,
       });
     };
     for (const record of records(podInventory.data)) podNode(record);
@@ -768,52 +956,66 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
       ensureNode(nodes, { id: `infrastructure-${hostId}`, name: hostId, kind: "infrastructure", subtitle: "Host", value: 0, unit: "% CPU" });
       edges.set(`podhost-${pod}-${hostId}`, { id: `podhost-${pod}-${hostId}`, source: `paas-${pod}`, target: `infrastructure-${hostId}`, value: 0, unit: "", kind: "hosting", label: "runs on" });
     }
-    for (const record of records(serviceHost.data)) {
-      const serviceId = text(record, "service_id");
-      const hostId = text(record, "host_id");
-      const bytes = numeric(record, "bytes");
-      if (!serviceId || !hostId || bytes <= 0) continue;
-      const bytesPerSecond = bytes / resolved.seconds;
-      ensureNode(nodes, { id: `infrastructure-${hostId}`, name: text(record, "host_name") || hostId, kind: "infrastructure", subtitle: "Host carrying traced traffic", value: bytesPerSecond, unit: "B/s" });
-      // Not a call: this is the network traffic moved on the host. It hangs off the pod when there
-      // is one, so the chain reads service - pod - host; a service on a bare host still gets an edge.
-      // A service that already reaches its host through a pod keeps that chain; adding a direct
-      // service-host edge here would bypass the Kubernetes column.
-      const source = `service-${serviceId}`;
-      if ([...edges.values()].some((edge) => edge.source === source && edge.id.startsWith("pod-"))) continue;
-      ensureNode(nodes, { id: source, name: text(record, "service_name") || serviceId, kind: "service", subtitle: "Service", value: bytesPerSecond, unit: "B/s" });
-      // Labelled like the pod-to-host hop: both say the same thing, that this runs on that host.
-      // The byte rate still sets the edge weight, but showing it here read as a traffic link
-      // between two tiers rather than as placement.
-      edges.set(`host-${source}-${hostId}`, { id: `host-${source}-${hostId}`, source, target: `infrastructure-${hostId}`, value: bytesPerSecond, unit: "B/s", kind: "hosting", label: "runs on" });
-    }
     // Problem counts are attached here rather than looked up in the view, so the map can order a
     // column by them and the tiles can count impacted entities off the same field.
     for (const node of nodes.values()) node.problems = problemsByEntity.get(node.entityId ?? entityIdOf(node.id)) ?? 0;
     return { nodes: [...nodes.values()], edges: [...edges.values()] };
-  }, [infrastructure.data, problemsByEntity, resolved.seconds, rum.data, rumService.data, podHost.data, podInventory.data, pods.data, service.data, serviceHost.data]);
+  }, [infrastructure.data, problemsByEntity, resolved.seconds, rum.data, rumService.data, podHost.data, podInventory.data, pods.data, service.data]);
 
   const map = useMemo(() => {
     const minutes = resolved.seconds / 60;
+    const grouped = groupPodsByWorkload(data);
+    const workloadIds = new Set(grouped.nodes.filter((node) => node.members).map((node) => node.id));
+    /**
+     * Namespace + workload, for flows whose cluster name does not match the pod's. Only used when
+     * the pair is unique on the map: the same workload name in the same namespace of two clusters
+     * would otherwise be guessed at.
+     */
+    const byNamespace = new Map<string, string | null>();
+    for (const node of grouped.nodes) {
+      if (!node.members || !node.workload || !node.namespace) continue;
+      const key = `${node.namespace}/${node.workload}`;
+      byNamespace.set(key, byNamespace.has(key) ? null : node.id);
+    }
     const flows = records(serviceWorkload.data).flatMap((record) => {
       const serviceId = text(record, "service_id");
       const workload = text(record, "workload");
       if (!serviceId || !workload) return [];
-      return [{ serviceId: `service-${serviceId}`, workloadId: workloadNodeId(podScope(text(record, "cluster"), text(record, "namespace")), workload), perMinute: numeric(record, "requests") / minutes }];
+      // `failed` is a boolean dimension; tolerate it arriving as a string.
+      const failed = record.failed === true || record.failed === "true";
+      const namespace = text(record, "namespace");
+      const exact = workloadNodeId(podScope(text(record, "cluster"), namespace), workload);
+      const targetId = workloadIds.has(exact) ? exact : byNamespace.get(`${namespace}/${workload}`) ?? exact;
+      return [{ serviceId: `service-${serviceId}`, targetId, perMinute: numeric(record, "requests") / minutes, failed }];
     });
+    const failureRates = new Map(records(serviceHealth.data).flatMap((record) => {
+      const requests = numeric(record, "requests");
+      const id = text(record, "entity_id");
+      return id && requests > 0 ? [[`service-${id}`, numeric(record, "failures") / requests] as const] : [];
+    }));
     // Null until the callers query has answered; a service missing from an answer is OTLP-only.
     const callers = entryServices.data && !entryServices.error
       ? new Map(records(entryServices.data).map((record) => [text(record, "service_id"), numeric(record, "callers")] as const))
       : null;
-    return addExternalCallers(addMeasuredTraffic(groupPodsByWorkload(data), flows), callers);
-  }, [data, entryServices.data, entryServices.error, resolved.seconds, serviceWorkload.data]);
+    const processFlows = records(serviceProcessTraffic.data).flatMap((record) => {
+      const serviceId = text(record, "service_id");
+      const pgId = text(record, "pg_id");
+      if (!serviceId || !pgId) return [];
+      const failed = record.failed === true || record.failed === "true";
+      return [{ serviceId: `service-${serviceId}`, targetId: `process-group-${pgId}`, perMinute: numeric(record, "requests") / minutes, failed }];
+    });
+    const onWorkload = new Set(flows.map((flow) => flow.serviceId));
+    const placed = addProcessGroups(grouped, records(serviceProcess.data), onWorkload, problemsByEntity);
+    return addExternalCallers(inferSinglePlacement(addMeasuredTraffic(placed, [...flows, ...processFlows]), failureRates), callers, failureRates);
+  }, [data, entryServices.data, entryServices.error, problemsByEntity, resolved.seconds, serviceHealth.data, serviceProcess.data, serviceProcessTraffic.data, serviceWorkload.data]);
 
   const recordCounts = useMemo<Record<TopologyQueryKey, number>>(() => ({
     rum: records(rum.data).length,
     service: records(service.data).length,
     infrastructure: records(infrastructure.data).length,
     problems: records(problems.data).length,
-    serviceHost: records(serviceHost.data).length,
+    serviceProcess: records(serviceProcess.data).length,
+    serviceProcessTraffic: records(serviceProcessTraffic.data).length,
     pods: records(pods.data).length,
     podInventory: records(podInventory.data).length,
     podHost: records(podHost.data).length,
@@ -826,7 +1028,7 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
     affectedEntities: records(affectedEntities.data).length,
     serviceWorkload: records(serviceWorkload.data).length,
     entryServices: records(entryServices.data).length,
-  }), [affectedEntities.data, entryServices.data, serviceWorkload.data, hostHealth.data, infrastructure.data, podHealth.data, podHost.data, podInventory.data, pods.data, problems.data, rum.data, rumErrors.data, rumHealth.data, rumService.data, service.data, serviceHealth.data, serviceHost.data]);
+  }), [affectedEntities.data, entryServices.data, serviceProcess.data, serviceProcessTraffic.data, serviceWorkload.data, hostHealth.data, infrastructure.data, podHealth.data, podHost.data, podInventory.data, pods.data, problems.data, rum.data, rumErrors.data, rumHealth.data, rumService.data, service.data, serviceHealth.data]);
   const truncated = useMemo<TopologyTruncation[]>(() => (Object.keys(recordCounts) as TopologyQueryKey[])
     .flatMap((key) => {
       const cap = QUERY_CAPS[key];
@@ -923,7 +1125,7 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
     truncated,
     /** True once ordering moved into the queries, so the UI can explain why sorting now reloads. */
     orderInQuery,
-    isLoading: rum.isLoading || service.isLoading || infrastructure.isLoading || problems.isLoading || serviceHost.isLoading || pods.isLoading || podInventory.isLoading || podHost.isLoading || podHealth.isLoading || rumService.isLoading || serviceHealth.isLoading || hostHealth.isLoading || rumHealth.isLoading || rumErrors.isLoading || affectedEntities.isLoading || serviceWorkload.isLoading || entryServices.isLoading,
+    isLoading: rum.isLoading || service.isLoading || infrastructure.isLoading || problems.isLoading || serviceProcess.isLoading || serviceProcessTraffic.isLoading || pods.isLoading || podInventory.isLoading || podHost.isLoading || podHealth.isLoading || rumService.isLoading || serviceHealth.isLoading || hostHealth.isLoading || rumHealth.isLoading || rumErrors.isLoading || affectedEntities.isLoading || serviceWorkload.isLoading || entryServices.isLoading,
     /**
      * Reported per query rather than as one banner. The queries are independent, and on a busy
      * tenant a single heavy one can fail while everything else returns fine - collapsing that into
@@ -931,12 +1133,12 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
      */
     errors: ([
       ["RUM applications", rum.error], ["Services", service.error], ["Infrastructure", infrastructure.error],
-      ["Problems", problems.error], ["Pod-to-host traffic", serviceHost.error],
+      ["Problems", problems.error], ["Service-to-process placement", serviceProcess.error], ["Service-to-process traffic", serviceProcessTraffic.error],
       ["Kubernetes pods", pods.error], ["Pod inventory", podInventory.error], ["Pod-to-host", podHost.error], ["Pod utilization", podHealth.error], ["RUM-to-service", rumService.error],
       ["Service latency", serviceHealth.error], ["Host resources", hostHealth.error], ["RUM metrics", rumHealth.error],
       ["RUM errors", rumErrors.error], ["Open alerts", affectedEntities.error],
       ["Service-to-workload traffic", serviceWorkload.error], ["Entry services", entryServices.error],
     ] as const).flatMap(([label, error]) => error ? [{ label, message: error.message }] : []),
-    refetch: async () => { await Promise.all([rum.refetch(), service.refetch(), infrastructure.refetch(), problems.refetch(), serviceHost.refetch(), pods.refetch(), podInventory.refetch(), podHost.refetch(), podHealth.refetch(), rumService.refetch(), serviceHealth.refetch(), hostHealth.refetch(), rumHealth.refetch(), rumErrors.refetch(), affectedEntities.refetch(), serviceWorkload.refetch(), entryServices.refetch()]); },
+    refetch: async () => { await Promise.all([rum.refetch(), service.refetch(), infrastructure.refetch(), problems.refetch(), serviceProcess.refetch(), serviceProcessTraffic.refetch(), pods.refetch(), podInventory.refetch(), podHost.refetch(), podHealth.refetch(), rumService.refetch(), serviceHealth.refetch(), hostHealth.refetch(), rumHealth.refetch(), rumErrors.refetch(), affectedEntities.refetch(), serviceWorkload.refetch(), entryServices.refetch()]); },
   };
 };
