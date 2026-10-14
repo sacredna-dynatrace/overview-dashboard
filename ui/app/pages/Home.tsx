@@ -10,7 +10,7 @@ import { buildTileLinks, buildEntityLink } from "../components/TileLinks";
 import { SortControl } from "../components/SortControl";
 import { StatusIcon } from "../components/StatusMark";
 import { paletteVars } from "../theme/colors";
-import { ExternalLinkIcon } from "@dynatrace/strato-icons";
+import { CheckmarkIcon, CopyIcon, ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { useTopologyData, type TopologyQueryKey } from "../hooks/useTopologyData";
 import { useNodeForecast, FORECAST_HORIZON_HOURS } from "../hooks/useNodeForecast";
 
@@ -92,6 +92,17 @@ export const Home = () => {
   // per-query breakdown would push the tiles below the fold every time somebody opens the page.
   // The headline stays, because a caveat nobody can see is the same as no caveat at all.
   const [truncationDetail, setTruncationDetail] = useState(false);
+  /**
+   * Feedback for the inspector's copy button. Reset after a moment, and whenever another query is
+   * opened, so "Copied" never sits next to a query that was not the one copied.
+   */
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  useEffect(() => { setCopyState("idle"); }, [selectedQuery]);
+  useEffect(() => {
+    if (copyState === "idle") return;
+    const timer = setTimeout(() => setCopyState("idle"), 2000);
+    return () => clearTimeout(timer);
+  }, [copyState]);
   const { nodes, edges, map, isLoading, errors, refetch, queries, recordCounts, problems, kubernetes, serviceHealth, hostHealth, rumHealth, podHealth, problemsByEntity, truncated, orderInQuery } = useTopologyData(timeframe, refreshedAt, sortBy);
   const { forecast, isLoading: forecastLoading } = useNodeForecast(selectedNode);
   // Node values are comparable within a column, edge values are not, so the idle panel highlights
@@ -183,7 +194,7 @@ export const Home = () => {
         <button type="button" onClick={() => setSelectedQuery(tile.key)}>{tile.meta}</button>
       </div>)}
     </section>
-    {selectedQuery && <section className="query-inspector" aria-label="Executed DQL"><div className="query-inspector-heading"><div><strong>{QUERY_LABELS[selectedQuery]} DQL</strong><span>{recordCounts[selectedQuery]} records returned</span></div><button type="button" onClick={() => setSelectedQuery(null)}>Close</button></div><pre>{queries[selectedQuery]}</pre></section>}
+    {selectedQuery && <section className="query-inspector" aria-label="Executed DQL"><div className="query-inspector-heading"><div><strong>{QUERY_LABELS[selectedQuery]} DQL</strong><span>{recordCounts[selectedQuery]} records returned</span></div><div className="query-inspector-actions"><button type="button" onClick={() => { navigator.clipboard.writeText(queries[selectedQuery]).then(() => setCopyState("copied"), () => setCopyState("failed")); }} aria-label={`Copy ${QUERY_LABELS[selectedQuery]} DQL to clipboard`}>{copyState === "copied" ? <CheckmarkIcon /> : <CopyIcon />}{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}</button><button type="button" onClick={() => setSelectedQuery(null)}>Close</button></div></div><pre>{queries[selectedQuery]}</pre></section>}
     <section className="content-grid"><div className="graph-panel"><div className="panel-heading"><div><h2>Traffic map <span className="panel-badge">Smartscape</span></h2><p>Services and what connects to them · nodes and rates from metrics, relationships from the Smartscape topology</p><div className="panel-links"><button type="button" onClick={() => setSelectedQuery("rumService")}>RUM → service DQL</button><button type="button" onClick={() => setSelectedQuery("pods")}>Pods DQL</button><button type="button" onClick={() => setSelectedQuery("serviceWorkload")}>Service → workload traffic DQL</button><button type="button" onClick={() => setSelectedQuery("entryServices")}>Entry services DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcess")}>Service → process → host DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcessTraffic")}>Service → process traffic DQL</button></div></div><div className="panel-controls"><SortControl value={sortBy} onChange={setSortBy} /><span className="live-indicator"><i /> Live</span></div></div>{nodes.length > 0 && <TopologyGraph nodes={map.nodes} edges={map.edges} sortBy={sortBy} onSelectionChange={setSelectedNode} />}</div><aside className="details-panel"><div className="panel-heading"><div><h2>{selectedNode ? selectedNode.name : "Busiest service"}</h2><p>{selectedNode ? selectedNode.subtitle : busiestService?.unit === "req/min" ? "Highest request rate in the Services column" : "Highest traffic in the Services column"}</p></div></div>{selectedNode ? <div className="selected-detail"><div className="detail-type">{selectedNode.virtual ? "not a monitored entity" : selectedNode.kind}</div><strong>{formatNodeValue(selectedNode)}</strong><span>Selected timeframe</span>{selectedNode.virtual && <p className="virtual-note">No RUM application reaches these services, and no other service is known to call them - OTLP-only services are included because their callers cannot be checked. This stands in for their callers - browsers, API clients, batch jobs - and its rate is the services' own request rate. The map shows the top services only, so the bands drawn add up to less than the total.</p>}{!selectedNode.members && !selectedNode.processes && !selectedNode.virtual && <a className="entity-link" href={buildEntityLink(selectedNode.kind, selectedNode.entityId ?? selectedNode.id.replace(/^(rum|service|paas|infrastructure)-/, ""), timeframe)} target="_blank" rel="noopener noreferrer">Open {selectedNode.name} in Dynatrace<ExternalLinkIcon /></a>}{(() => {
       const service = serviceHealth.get(selectedNode.id);
       const host = hostHealth.get(selectedNode.id);

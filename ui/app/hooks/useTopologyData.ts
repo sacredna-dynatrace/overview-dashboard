@@ -470,13 +470,16 @@ const serviceProcessQuery = (timeframe: ResolvedTimeframe) => `fetch dt.entity.s
 /**
  * Requests per service per process group, for the bands into process-group nodes.
  *
- * `dt.service.request.count` carries `dt.process_group.id` (verified). Requests that also carry a
- * Kubernetes workload (by name or by its classic `dt.entity.cloud_application`) are left out: those are already drawn on the workload band, and counting them
- * again here would double the service's outflow. Split by `failed` for the same reason as
- * `serviceWorkloadQuery`.
+ * `dt.service.request.count` carries `dt.process_group.id` (verified). Requests are not filtered by
+ * Kubernetes dimensions here. That filter used to keep workload traffic off the process-group bands,
+ * but a tenant with OneAgent in containers and no Kubernetes integration has
+ * `dt.entity.cloud_application` on every request and no pod on the map - so its requests were
+ * dropped from both bands. The map now attaches these rates only to service -> process-group edges
+ * it actually drew, and a service placed on a workload never gets one, which keeps a request from
+ * being counted twice. Split by `failed` for the same reason as `serviceWorkloadQuery`.
  */
-const serviceProcessTrafficQuery = (timeframe: ResolvedTimeframe) => `timeseries requests = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service, dt.process_group.id, k8s.workload.name, dt.entity.cloud_application, failed }, ${timeWindow(timeframe)}
-| filter isNotNull(dt.process_group.id) and isNull(k8s.workload.name) and isNull(dt.entity.cloud_application) and requests > 0
+const serviceProcessTrafficQuery = (timeframe: ResolvedTimeframe) => `timeseries requests = sum(dt.service.request.count, default: 0, scalar: true), by: { dt.entity.service, dt.process_group.id, failed }, ${timeWindow(timeframe)}
+| filter isNotNull(dt.process_group.id) and requests > 0
 | fields service_id = dt.entity.service, pg_id = dt.process_group.id, failed, requests
 | sort requests desc
 | limit ${EDGE_LIMIT}`;
@@ -1004,9 +1007,18 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
       const failed = record.failed === true || record.failed === "true";
       return [{ serviceId: `service-${serviceId}`, targetId: `process-group-${pgId}`, perMinute: numeric(record, "requests") / minutes, failed }];
     });
-    const onWorkload = new Set(flows.map((flow) => flow.serviceId));
+    /**
+     * Only traffic that reaches a workload on the map places the service there. Counting every
+     * workload-tagged flow skipped the process-group placement for services whose workload has no
+     * pod on the map (OneAgent in containers, no Kubernetes integration), and the workload band was
+     * then dropped for want of a node - so those services reached neither column.
+     */
+    const onWorkload = new Set(flows.filter((flow) => workloadIds.has(flow.targetId)).map((flow) => flow.serviceId));
     const placed = addProcessGroups(grouped, records(serviceProcess.data), onWorkload, problemsByEntity);
-    return addExternalCallers(inferSinglePlacement(addMeasuredTraffic(placed, [...flows, ...processFlows]), failureRates), callers, failureRates);
+    // Process-group rates only weight edges the placement drew, never create new ones.
+    const drawn = new Set(placed.edges.map((edge) => edge.id));
+    const placedProcessFlows = processFlows.filter((flow) => drawn.has(`hosting:${flow.serviceId}->${flow.targetId}`));
+    return addExternalCallers(inferSinglePlacement(addMeasuredTraffic(placed, [...flows, ...placedProcessFlows]), failureRates), callers, failureRates);
   }, [data, entryServices.data, entryServices.error, problemsByEntity, resolved.seconds, serviceHealth.data, serviceProcess.data, serviceProcessTraffic.data, serviceWorkload.data]);
 
   const recordCounts = useMemo<Record<TopologyQueryKey, number>>(() => ({

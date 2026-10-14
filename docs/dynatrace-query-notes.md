@@ -391,9 +391,17 @@ where that metric was non-zero, so on a tenant whose hosts did not report it a V
 showed no host at all - a RUM app's services could be selected and the two right columns stayed
 empty.
 
+**"On a workload" means a workload drawn on the map.** A tenant with OneAgent inside containers but no
+Kubernetes integration (pods tile 0, clusters 0, services named `nubf-svc-*`) puts
+`dt.entity.cloud_application` on every request, so the workload-traffic fallback resolved a workload
+for every service - and the placement then skipped the process group, while the workload band was
+dropped because no such workload node exists. Those services reached neither column. Only flows
+whose workload is on the map now count as a workload placement.
+
 Bands into a process group come from `dt.service.request.count` split by `dt.process_group.id`
-(verified), excluding requests that carry `k8s.workload.name` so nothing is counted on both a
-workload band and a process-group band. Process groups exist only on the map; the pod tile is
+(verified). They are attached only to service -> process-group edges the placement drew, and a
+service placed on a workload never gets one, so nothing is counted on both bands. (Filtering
+workload-tagged requests out in the query instead dropped them from both bands on the tenant above.) Process groups exist only on the map; the pod tile is
 unaffected. Verified on diw85600, where every service is in Kubernetes, so no process group is
 drawn there - the effect has to be checked on a tenant with VM-hosted services.
 

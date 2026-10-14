@@ -159,7 +159,6 @@ ui/
       Header.tsx             # Top nav bar: app title and navigation links
     pages/
       Home.tsx               # "/" route — landing page
-      Data.tsx               # "/data" route — DQL query example
   assets/                    # Static images and SVGs bundled with the app
 ```
 
