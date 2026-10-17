@@ -145,3 +145,62 @@
 /* A white rim keeps a failed particle legible on a band of any colour. */
 .topology-particle.is-failed { opacity: 1; stroke: #fff; stroke-width: 0.8; }
 .status-icon { flex: none; vertical-align: -1px; }
+/* Blast radius page */
+.blast-grid { display: grid; grid-template-columns: 320px minmax(0, 1fr) 300px; gap: 20px; max-width: 1440px; margin: 0 auto; align-items: start; }
+.blast-list { max-height: 820px; display: flex; flex-direction: column; overflow: hidden; }
+.blast-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 20px 10px; }
+.blast-filters button { padding: 3px 8px; border: 1px solid var(--dashboard-line); border-radius: 12px; background: var(--dashboard-surface); color: var(--dashboard-muted); cursor: pointer; font-size: 11px; text-transform: capitalize; }
+.blast-filters button.is-active { border-color: var(--active); color: var(--active); font-weight: 700; }
+.blast-problems { flex: 1; margin: 0; padding: 0 10px 12px; overflow-y: auto; list-style: none; }
+.blast-problems button { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 10px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--dashboard-ink); cursor: pointer; text-align: left; }
+.blast-problems button:hover { background: #f4f8fb; }
+.blast-problems button.is-selected { border-color: var(--active); background: #f0f9ff; }
+.blast-problem-top { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.blast-problem-meta { color: var(--dashboard-muted); font-size: 11px; }
+.blast-empty { padding: 16px; color: var(--dashboard-muted); font-size: 12px; }
+.blast-graph { min-height: 560px; }
+.blast-canvas { display: block; width: 100%; max-width: 760px; margin: 0 auto; }
+.blast-ring-guide { fill: none; stroke: var(--dashboard-line); stroke-dasharray: 2 5; animation: blast-reveal 0.5s ease-out both; }
+.blast-edge path { fill: none; stroke: #cbd5e1; stroke-width: 1.4; }
+.blast-edge.is-hot path { stroke: var(--status-problem); stroke-width: 2.2; }
+.blast-edge.is-placement path { stroke: var(--tier-infrastructure); stroke-dasharray: 3 3; }
+.blast-edge { animation: blast-reveal 0.5s ease-out both; }
+.blast-particle { fill: #94a3b8; }
+.blast-edge.is-hot .blast-particle { fill: var(--status-problem); }
+.blast-node { animation: blast-pop 0.45s ease-out both; }
+.blast-node.is-exposed { opacity: 0.72; }
+.blast-label { fill: var(--dashboard-ink); font-size: 10px; text-anchor: middle; paint-order: stroke; stroke: #fff; stroke-width: 3px; stroke-linejoin: round; }
+.blast-node.is-root .blast-label { font-size: 11.5px; font-weight: 700; }
+.blast-pulse { fill: none; stroke: var(--status-problem); stroke-width: 2; transform-box: fill-box; transform-origin: center; animation: blast-pulse 1.8s ease-out infinite; }
+.blast-hidden { fill: var(--dashboard-muted); font-size: 10px; text-anchor: middle; }
+@keyframes blast-reveal { from { opacity: 0; } to { opacity: 1; } }
+@keyframes blast-pop { from { opacity: 0; } to { opacity: 1; } }
+@keyframes blast-pulse { from { opacity: 0.7; transform: scale(1); } to { opacity: 0; transform: scale(2.1); } }
+@media (prefers-reduced-motion: reduce) { .blast-pulse, .blast-particle { display: none; } .blast-node, .blast-edge, .blast-ring-guide { animation: none; } }
+@media (max-width: 1200px) { .blast-grid { grid-template-columns: 1fr; } .blast-list { max-height: 360px; } }
+.blast-description { max-height: 380px; overflow-y: auto; width: 100%; font-size: 12px; line-height: 1.5; }
+.blast-description p { margin: 4px 0; color: var(--dashboard-muted); }
+.blast-root { display: flex; flex-direction: column; gap: 3px; width: 100%; margin-bottom: 12px; }
+.blast-root > span { color: var(--dashboard-muted); font-size: 11px; }
+.blast-root b, .blast-root a { font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+/* Three narrow columns; minmax(0, 1fr) lets them shrink instead of pushing out of the panel. */
+.blast-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.blast-stats b { overflow-wrap: anywhere; }
+.blast-entity-link { overflow: hidden; color: var(--active); text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+.blast-root .blast-entity-link { white-space: normal; }
+.blast-entity-link:hover, .blast-entity-link:focus-visible { text-decoration: underline; }
+.blast-node.is-linked { cursor: pointer; }
+.blast-node.is-linked:hover circle:not(.blast-pulse) { filter: drop-shadow(0 2px 4px rgb(15 23 42 / 25%)); }
+.blast-summary { margin: 6px 0 8px; padding-left: 16px; color: var(--dashboard-ink); }
+.blast-summary li { margin-bottom: 4px; }
+.blast-description details { margin-top: 6px; }
+.blast-description summary { color: var(--active); cursor: pointer; font-size: 11px; }
+.blast-description :is(h1, h2, h3, h4) { margin: 10px 0 4px; font-size: 12.5px; }
+.panel-links a { display: inline-flex; align-items: center; gap: 4px; color: #0369a1; font-size: 11px; text-decoration: none; }
+.panel-links a svg { width: 12px; height: 12px; }
+.blast-edge.is-event path { stroke: #94a3b8; stroke-dasharray: 2 4; }
+.blast-root em { color: var(--dashboard-muted); font-size: 11px; font-style: normal; }
+.blast-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.blast-analysis-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; color: var(--dashboard-muted); font-size: 12px; }
+.blast-controls { display: flex; flex-direction: column; gap: 8px; padding: 0 20px 10px; }
+.blast-controls-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }

@@ -1,0 +1,161 @@
+{
+  "version": 21,
+  "variables": [],
+  "tiles": {
+    "0": {
+      "type": "markdown",
+      "title": "",
+      "content": "# Recurrence - last 30 days\n\nOne row per **runtime unit**: a Kubernetes workload (`k8s · namespace/workload`), otherwise a process group (`process · …`), otherwise a host. Problems raised on a service are counted on the unit the service runs in. Days are UTC. Every tile reads a fixed 30-day window, independent of the dashboard timeframe."
+    },
+    "1": {
+      "title": "Davis problems per runtime unit per day (top 25)",
+      "type": "data",
+      "query": "// Recurrence: Davis problems per runtime unit per day.\n// Unit = Kubernetes workload, else process group, else host. Service problems roll up to the unit the service runs in.\nfetch dt.davis.problems, from: now()-30d\n| filter dt.davis.is_duplicate == false\n| expand id = affected_entity_ids\n| summarize { start = min(event.start), title = takeFirst(event.name) }, by: { display_id, id = toString(id) }\n| fieldsAdd kind = substring(id, from: 0, to: indexOf(id, \"-\"))\n// Services and process instances become the process instances they run in.\n| lookup [\n    fetch dt.entity.service, from: now()-30d\n    | fields sid = toString(id), pgis = runs_on[dt.entity.process_group_instance]\n  ], sourceField: id, lookupField: sid, fields: { pgis }\n| fieldsAdd pgis = if(kind == \"PROCESS_GROUP_INSTANCE\", array(id), else: pgis)\n| fieldsAdd pgis = coalesce(pgis, array(\"\"))\n| expand pgi = pgis\n| fieldsAdd pgi = toString(pgi)\n| lookup [\n    smartscapeNodes PROCESS, from: now()-30d\n    | fields pgi = id_classic, process_id = toString(id), pg_name = dt.process_group.detected_name\n  ], sourceField: pgi, lookupField: pgi, fields: { process_id, pg_name }\n| lookup [\n    smartscapeEdges runs_on, from: now()-30d\n    | filter source_type == \"PROCESS\" and target_type == \"CONTAINER\"\n    | fields process_id = toString(source_id), container_id = toString(target_id)\n  ], sourceField: process_id, lookupField: process_id, fields: { container_id }\n| lookup [\n    smartscapeEdges is_part_of, from: now()-30d\n    | filter source_type == \"CONTAINER\" and target_type == \"K8S_POD\"\n    | fields container_id = toString(source_id), pod_id = toString(target_id)\n  ], sourceField: container_id, lookupField: container_id, fields: { pod_id }\n| lookup [\n    smartscapeNodes K8S_POD, from: now()-30d\n    | fields pod_id = toString(id), pod_workload = k8s.workload.name, pod_ns = k8s.namespace.name\n  ], sourceField: pod_id, lookupField: pod_id, fields: { pod_workload, pod_ns }\n// Problems raised on the workload itself.\n| lookup [\n    fetch dt.entity.cloud_application, from: now()-30d\n    | fields cid = toString(id), ca_name = entity.name, ca_ns = namespaceName\n  ], sourceField: id, lookupField: cid, fields: { ca_name, ca_ns }\n| fieldsAdd host_name = if(kind == \"HOST\", entityName(id, type: \"dt.entity.host\"))\n| fieldsAdd unit = coalesce(\n    if(isNotNull(pod_workload), concat(\"k8s · \", pod_ns, \"/\", pod_workload)),\n    if(isNotNull(ca_name), concat(\"k8s · \", ca_ns, \"/\", ca_name)),\n    if(isNotNull(pg_name), concat(\"process · \", pg_name)),\n    if(isNotNull(host_name), concat(\"host · \", host_name)))\n| filter isNotNull(unit)\n| makeTimeseries problems = countDistinct(display_id), by: { unit }, time: start, interval: 1d, from: now()-30d, to: now()\n| fieldsAdd total = arraySum(problems)\n| sort total desc\n| limit 25\n| fields timeframe, interval, unit, problems",
+      "visualization": "heatmap",
+      "visualizationSettings": {
+        "dataMapping": {
+          "bucketValue": "problems"
+        },
+        "legend": {
+          "showLegend": true
+        },
+        "colorModeType": {
+          "numericColorPalette": "turquoise-inverted"
+        },
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "2": {
+      "title": "OOM kills per workload per day",
+      "type": "data",
+      "query": "// Recurrence: OOM kills per Kubernetes workload per day (matches the OOMKilled events on isb54165).\ntimeseries oom = sum(dt.kubernetes.container.oom_kills, default: 0), by: { k8s.namespace.name, k8s.workload.name }, from: now()-30d, interval: 1d\n| fieldsAdd unit = concat(\"k8s · \", k8s.namespace.name, \"/\", k8s.workload.name), total = arraySum(oom)\n| filter total > 0\n| sort total desc\n| limit 25\n| fields timeframe, interval, unit, oom",
+      "visualization": "heatmap",
+      "visualizationSettings": {
+        "dataMapping": {
+          "bucketValue": "oom"
+        },
+        "legend": {
+          "showLegend": true
+        },
+        "colorModeType": {
+          "numericColorPalette": "turquoise-inverted"
+        },
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "3": {
+      "title": "Process crashes per process group per day (excl. short-lived / Linux System)",
+      "type": "data",
+      "query": "// Recurrence: process crashes/restarts per runtime unit per day.\n// Event type differs per tenant (PROCESS_RESTART or PGI_CRASHED_INFO), so both are read.\nfetch dt.davis.events, from: now()-30d\n| filter in(event.type, \"PROCESS_RESTART\", \"PGI_CRASHED_INFO\")\n| fields timestamp, pgi = toString(dt.source_entity)\n| lookup [\n    smartscapeNodes PROCESS, from: now()-30d\n    | fields pgi = id_classic, process_id = toString(id), pg_name = dt.process_group.detected_name\n  ], sourceField: pgi, lookupField: pgi, fields: { process_id, pg_name }\n// Aggregate pseudo-groups, not applications.\n| filter isNotNull(pg_name) and not in(pg_name, \"Short-lived processes\", \"Linux System\")\n| lookup [\n    smartscapeEdges runs_on, from: now()-30d\n    | filter source_type == \"PROCESS\" and target_type == \"CONTAINER\"\n    | fields process_id = toString(source_id), container_id = toString(target_id)\n  ], sourceField: process_id, lookupField: process_id, fields: { container_id }\n| lookup [\n    smartscapeEdges is_part_of, from: now()-30d\n    | filter source_type == \"CONTAINER\" and target_type == \"K8S_POD\"\n    | fields container_id = toString(source_id), pod_id = toString(target_id)\n  ], sourceField: container_id, lookupField: container_id, fields: { pod_id }\n| lookup [\n    smartscapeNodes K8S_POD, from: now()-30d\n    | fields pod_id = toString(id), pod_workload = k8s.workload.name, pod_ns = k8s.namespace.name\n  ], sourceField: pod_id, lookupField: pod_id, fields: { pod_workload, pod_ns }\n| fieldsAdd unit = coalesce(if(isNotNull(pod_workload), concat(\"k8s · \", pod_ns, \"/\", pod_workload)), concat(\"process · \", pg_name))\n| makeTimeseries crashes = count(), by: { unit }, interval: 1d, from: now()-30d, to: now()\n| fieldsAdd total = arraySum(crashes)\n| sort total desc\n| limit 25\n| fields timeframe, interval, unit, crashes",
+      "visualization": "heatmap",
+      "visualizationSettings": {
+        "dataMapping": {
+          "bucketValue": "crashes"
+        },
+        "legend": {
+          "showLegend": true
+        },
+        "colorModeType": {
+          "numericColorPalette": "turquoise-inverted"
+        },
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    },
+    "4": {
+      "title": "Most recurrent runtime units",
+      "type": "data",
+      "query": "// Recurrence: Davis problems per runtime unit per day.\n// Unit = Kubernetes workload, else process group, else host. Service problems roll up to the unit the service runs in.\nfetch dt.davis.problems, from: now()-30d\n| filter dt.davis.is_duplicate == false\n| expand id = affected_entity_ids\n| summarize { start = min(event.start), title = takeFirst(event.name) }, by: { display_id, id = toString(id) }\n| fieldsAdd kind = substring(id, from: 0, to: indexOf(id, \"-\"))\n// Services and process instances become the process instances they run in.\n| lookup [\n    fetch dt.entity.service, from: now()-30d\n    | fields sid = toString(id), pgis = runs_on[dt.entity.process_group_instance]\n  ], sourceField: id, lookupField: sid, fields: { pgis }\n| fieldsAdd pgis = if(kind == \"PROCESS_GROUP_INSTANCE\", array(id), else: pgis)\n| fieldsAdd pgis = coalesce(pgis, array(\"\"))\n| expand pgi = pgis\n| fieldsAdd pgi = toString(pgi)\n| lookup [\n    smartscapeNodes PROCESS, from: now()-30d\n    | fields pgi = id_classic, process_id = toString(id), pg_name = dt.process_group.detected_name\n  ], sourceField: pgi, lookupField: pgi, fields: { process_id, pg_name }\n| lookup [\n    smartscapeEdges runs_on, from: now()-30d\n    | filter source_type == \"PROCESS\" and target_type == \"CONTAINER\"\n    | fields process_id = toString(source_id), container_id = toString(target_id)\n  ], sourceField: process_id, lookupField: process_id, fields: { container_id }\n| lookup [\n    smartscapeEdges is_part_of, from: now()-30d\n    | filter source_type == \"CONTAINER\" and target_type == \"K8S_POD\"\n    | fields container_id = toString(source_id), pod_id = toString(target_id)\n  ], sourceField: container_id, lookupField: container_id, fields: { pod_id }\n| lookup [\n    smartscapeNodes K8S_POD, from: now()-30d\n    | fields pod_id = toString(id), pod_workload = k8s.workload.name, pod_ns = k8s.namespace.name\n  ], sourceField: pod_id, lookupField: pod_id, fields: { pod_workload, pod_ns }\n// Problems raised on the workload itself.\n| lookup [\n    fetch dt.entity.cloud_application, from: now()-30d\n    | fields cid = toString(id), ca_name = entity.name, ca_ns = namespaceName\n  ], sourceField: id, lookupField: cid, fields: { ca_name, ca_ns }\n| fieldsAdd host_name = if(kind == \"HOST\", entityName(id, type: \"dt.entity.host\"))\n| fieldsAdd unit = coalesce(\n    if(isNotNull(pod_workload), concat(\"k8s · \", pod_ns, \"/\", pod_workload)),\n    if(isNotNull(ca_name), concat(\"k8s · \", ca_ns, \"/\", ca_name)),\n    if(isNotNull(pg_name), concat(\"process · \", pg_name)),\n    if(isNotNull(host_name), concat(\"host · \", host_name)))\n| filter isNotNull(unit)\n| fieldsAdd day = bin(start, 1d)\n| summarize { `Days with problems` = countDistinct(day), Problems = countDistinct(display_id), `Last problem` = max(start) }, by: { Unit = unit }\n| sort `Days with problems` desc, Problems desc\n| limit 20",
+      "visualization": "table",
+      "visualizationSettings": {
+        "autoSelectVisualization": false
+      },
+      "querySettings": {
+        "maxResultRecords": 1000,
+        "defaultScanLimitGbytes": 500,
+        "maxResultMegaBytes": 1,
+        "defaultSamplingRatio": 10,
+        "enableSampling": false
+      },
+      "davis": {
+        "enabled": false,
+        "davisVisualization": {
+          "isAvailable": true
+        }
+      }
+    }
+  },
+  "layouts": {
+    "0": {
+      "x": 0,
+      "y": 0,
+      "w": 24,
+      "h": 2
+    },
+    "1": {
+      "x": 0,
+      "y": 2,
+      "w": 24,
+      "h": 10
+    },
+    "2": {
+      "x": 0,
+      "y": 12,
+      "w": 12,
+      "h": 6
+    },
+    "3": {
+      "x": 12,
+      "y": 12,
+      "w": 12,
+      "h": 6
+    },
+    "4": {
+      "x": 0,
+      "y": 18,
+      "w": 24,
+      "h": 8
+    }
+  },
+  "importedWithCode": false,
+  "settings": {},
+  "annotations": []
+}

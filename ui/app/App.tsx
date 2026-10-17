@@ -2,6 +2,7 @@ import { PageLayout } from "@dynatrace/strato-components/layouts";
 import React from "react";
 import { Route, Routes } from "react-router-dom";
 import { Header } from "./components/Header";
+import { BlastRadius } from "./pages/BlastRadius";
 import { Home } from "./pages/Home";
 
 export const App = () => {
@@ -13,6 +14,7 @@ export const App = () => {
       <PageLayout.Content>
         <Routes>
           <Route path="/" element={<Home />} />
+          <Route path="/blast-radius" element={<BlastRadius />} />
         </Routes>
       </PageLayout.Content>
     </PageLayout>

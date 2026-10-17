@@ -10,6 +10,9 @@ export const Header = () => {
         <AppHeader.NavigationItem as={Link} to="/">
           Topology
         </AppHeader.NavigationItem>
+        <AppHeader.NavigationItem as={Link} to="/blast-radius">
+          Blast radius
+        </AppHeader.NavigationItem>
       </AppHeader.Navigation>
     </AppHeader>
   );

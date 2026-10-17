@@ -158,7 +158,8 @@ ui/
     components/
       Header.tsx             # Top nav bar: app title and navigation links
     pages/
-      Home.tsx               # "/" route — landing page
+      Home.tsx               # "/" route — topology map
+      BlastRadius.tsx        # "/blast-radius" route — a Davis problem drawn as rings around its root cause
   assets/                    # Static images and SVGs bundled with the app
 ```
 

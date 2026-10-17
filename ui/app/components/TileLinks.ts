@@ -125,3 +125,26 @@ export const buildTileLinks = (timeframe: Timeframe, singleRumApplicationId: str
     problems: `${base}/dynatrace.davis.problems/?${absoluteRange(timeframe)}`,
   };
 };
+
+/**
+ * Deep links for the blast-radius page, each copied from a real URL on isb54165.
+ *
+ * - A problem opens by its `event.id` (`…_1792113840000V2`), not its display id, and takes
+ *   `from`/`to` with parentheses like the frontend app.
+ * - A process opens in the infrastructure app under its Smartscape `PROCESS-…` id. Problems name
+ *   it `PROCESS_GROUP_INSTANCE-…`; the hex part is the same in both models.
+ * - A workload opens in the Kubernetes app under its Smartscape id (`K8S_DEPLOYMENT-…` and so on).
+ *   That hex differs from the classic `CLOUD_APPLICATION-…` a problem names, so the caller has to
+ *   look it up (`id_classic`); there is no string rewrite that gets from one to the other.
+ */
+export const buildProblemLink = (eventId: string, timeframe: Timeframe): string =>
+  `${environment()}/ui/apps/${"dynatrace.davis.problems"}/problem/${encodeURIComponent(eventId)}?${vitalsRange(timeframe)}`;
+
+export const buildProcessLink = (processGroupInstanceId: string, timeframe: Timeframe): string | null => {
+  const hex = /^PROCESS_GROUP_INSTANCE-([0-9A-F]+)$/.exec(processGroupInstanceId)?.[1];
+  if (!hex) return null;
+  return `${environment()}/ui/apps/${"dynatrace.infraops"}/smartscape/Compute/Processes?${timeframeParam(timeframe)}&fullPageId=${encodeURIComponent(`PROCESS-${hex}`)}`;
+};
+
+export const buildWorkloadLink = (smartscapeWorkloadId: string, timeframe: Timeframe): string =>
+  `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/workload/${"K8S_WORKLOAD"}?perspective=Health&detailsId=${encodeURIComponent(smartscapeWorkloadId)}&${timeframeParam(timeframe)}`;

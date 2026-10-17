@@ -474,6 +474,75 @@ service several frontends call, so it stays a relationship line.
 The external-callers node lives in the map data only (`map` from the hook). It is never counted in
 the tiles and carries no problems or entity link.
 
+## Blast radius page
+
+`/blast-radius` draws one Davis problem as rings around its root cause. Verified on isb54165 (7 days):
+353 problems, 147 with `root_cause_entity_id` (133 of them services, a few process groups and hosts);
+the rest have none and are drawn with a dashed "problem" centre ringed by the affected entities.
+
+- **Rings come from the call graph, not from time.** Every event in a problem carries the same
+  start minute, so there is no propagation order to replay. Ring 1 is the root's `called_by`
+  (classic `dt.entity.service`; Smartscape has no SERVICE calls SERVICE), or the services on a
+  root host/process; ring 2 their callers; the last ring is RUM apps (Smartscape FRONTEND calls).
+- **Confirmed vs exposed.** Davis's `affected_entity_ids` are red; the rest of the fan is muted.
+  e.g. DB service hjesmn: 31 callers, 3 confirmed affected.
+- **Sort nulls.** `dt.davis.affected_users_count` is often null, and a descending sort puts nulls
+  first, so the list sorts on `coalesce(users, 0)`.
+- `called_by` lists are capped by the platform (a warning, not an error), and OTLP-only services
+  have none, so the rings can stop early.
+
+### Problem origin: root, self, events
+
+Problems on isb54165 (30 days, 1,624): 660 with a root cause; of the 964 without one, **955 have a
+single affected entity**. That is not "cause unknown" - nothing spread to the entity, the problem is
+its own - so the page treats it as the origin (`self`) and draws its callers, exactly like a root
+cause. The other ~9 group concurrent events Davis did not link: mostly one process failing on two
+hosts (apache-tomcat-*, tomcat_mtms*, ContractApplication), once a host plus its nginx, twice
+unrelated services. Those are drawn as events around the problem, first ring only, with no impact
+colouring and no dependency fan. The Problems app shows "No root cause" for both kinds.
+
+`dt.davis.affected_users_count` (set on 241 problems) comes from **RUM Classic**. RUM Classic does
+not appear as Smartscape FRONTEND nodes or in `dt.frontend.*`, which is why the topology shows no
+RUM on that tenant while Davis still counts users. It is a real user count, not a guess.
+
+### Davis analysis and links
+
+- **No replay.** A timeline replay was built and removed: on isb54165 a steady sweep showed each
+  problem for 0.19 s, and an incident-by-incident replay still did not earn its space.
+- **Davis analysis** is `event.description` (English Markdown), fetched for the selected problem
+  only; the display id is checked against `^P-d+$` before it goes into DQL. The panel shows a
+  Korean summary built from the problem's fields (root cause, affected entities by type, users,
+  impact level) with the English original collapsed. Sending customer problem text to an outside
+  translator was ruled out.
+- **Deep links** (copied from real isb54165 URLs): problem by `event.id` (`…V2`, not the
+  display id) with `from`/`to`; process via `PROCESS-<hex>` where the hex equals the
+  `PROCESS_GROUP_INSTANCE` one; workload via its Smartscape id, which does **not** share the hex of
+  the classic `CLOUD_APPLICATION-…` (e.g. CLOUD_APPLICATION-093B… is K8S_DEPLOYMENT-0226…), so it is
+  looked up through `id_classic` across K8S_DEPLOYMENT/STATEFULSET/DAEMONSET/CRONJOB/JOB. Types without
+  a verified link (process group, custom device, …) are not linked.
+
+### Explain problem (Dynatrace Assist)
+
+Dynatrace Assist (`dynatrace.davis.copilot`) declares an intent `ask-question` (`addonMode: overlay`;
+properties `prompt` required, `execute` boolean, `contexts` [{type, value}]), read from its manifest
+with `dtctl get app dynatrace.davis.copilot`. The page sends it through Strato `IntentButton` with
+`options: { recommendedAppId, recommendedIntentId }` - the three-argument `sendIntent` is deprecated
+and fails lint - and the Problems app's own prompt. **Assist does not follow the user's language for
+this app**: the same user and prompt got Korean from the Problems app and English from here. So the
+prompt ends with "Please answer in <language>." from `getLanguage()` (user-preferences), mapped to
+an English name with `Intl.DisplayNames` on the base code; nothing is added for English. `contexts` is not sent: its accepted types are undocumented. The overlay
+only opens inside the Dynatrace shell, so check it on a deployed build, not the local dev server.
+
+The prompt (`ui/app/assistPrompt.ts`) carries what the page knows: the problem window in UTC, the
+origin as the page reads it (root / self / concurrent events), and up to 10 affected entities **by
+id only**. Entity names are free text: "Netty on 0:0:0:0:0:0:0:0:*" made Assist reject the whole
+prompt under its PII blocking (IP_ADDRESS). Problem titles still go in; custom-alert titles can
+name hosts ("(ec2-…) Host Memory …") - not blocked so far, but the same kind of risk. With only the display id, Assist first searched the last 72 hours, found nothing and searched
+again. It asks for logs, metrics, traces and events from 30 minutes before the start to the end -
+bounded on purpose, since an unbounded "all relevant data" invites broad log scans - and for a
+timeline, evidence with the DQL used, impact, remediation and prevention, and "not supported by the
+data" rather than a guess. Longest prompt on isb54165: 1,301 characters (31 affected entities).
+
 ## Davis analyzers (the forecast finding)
 
 `@dynatrace-sdk/client-davis-analyzers` takes a DQL timeseries expression directly, so the forecast

@@ -6,10 +6,14 @@ import { Tooltip } from "@dynatrace/strato-components/overlays";
 import { Text } from "@dynatrace/strato-components/typography";
 import { RefreshAutoIcon, RefreshIcon } from "@dynatrace/strato-icons";
 
-/** Auto-refresh cadences offered next to the timeframe selector. `null` means "Off". */
+/**
+ * Auto-refresh cadences offered next to the timeframe selector. `null` means "Off".
+ *
+ * One minute is the shortest: every refresh reruns all of a page's queries - 17 on the topology
+ * page - and the data under them does not move faster than that.
+ */
 const INTERVALS: { value: string; label: string; ms: number | null }[] = [
   { value: "off", label: "Off", ms: null },
-  { value: "30s", label: "30 sec", ms: 30_000 },
   { value: "1m", label: "1 min", ms: 60_000 },
   { value: "5m", label: "5 min", ms: 300_000 },
   { value: "15m", label: "15 min", ms: 900_000 },
