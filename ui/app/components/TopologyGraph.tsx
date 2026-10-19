@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { ACTIVE, GRID, PROCESS_GROUP, STATUS, TIER as TIER_COLORS, VIRTUAL } from "../theme/colors";
 import { StatusIcon, StatusMark } from "./StatusMark";
 
@@ -66,6 +66,11 @@ type TopologyGraphProps = {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
   sortBy: TopologySort;
+  /**
+   * The selected node, owned by the page so that the map search can select a node the map has not
+   * drawn - which re-anchors the map on it, exactly like a click.
+   */
+  selectedId: string | null;
   onSelectionChange: (node: TopologyNode | null) => void;
 };
 
@@ -161,8 +166,7 @@ export const formatEdgeValue = (edge: TopologyEdge) => isMeasured(edge)
   ? `${formatValue(edge.value, edge.unit)}${edge.label ? ` · ${edge.label}` : ""}${edge.inferred ? " · inferred: single placement" : ""}`
   : edge.label ?? formatValue(edge.value, edge.unit);
 
-export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: TopologyGraphProps) => {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionChange }: TopologyGraphProps) => {
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const degrees = useMemo(() => {
     const counts = new Map<string, number>();
@@ -249,7 +253,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
   const anchorKind = useMemo(() => (selectedId ? nodesById.get(selectedId)?.kind : undefined) ?? "service", [nodesById, selectedId]);
   const columns = useMemo(() => {
     const placed = new Map<string, number>();
-    const built = new Map<TopologyNode["kind"], { kind: TopologyNode["kind"]; drawn: TopologyNode[]; hidden: number }>();
+    const built = new Map<TopologyNode["kind"], { kind: TopologyNode["kind"]; drawn: TopologyNode[]; hidden: number; beyond: number }>();
     // Columns are filled outward from the anchor, so a column's parents are always already ordered
     // by the time it is laid out.
     const outward = (Object.keys(columnX) as TopologyNode["kind"][])
@@ -277,11 +281,18 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
         .slice(0, MAX_DRAWN_PER_COLUMN)
         .map((entry) => entry.node);
       drawn.forEach((node, index) => placed.set(node.id, index));
-      built.set(kind, { kind, drawn, hidden: related.length - drawn.length });
+      /**
+       * With nothing selected the services column is the anchor column: its related nodes are the
+       * ten drawn anchors themselves, so `hidden` is always 0 there and the map gave no sign that
+       * hundreds of services were left out. `beyond` is the rest of the column's inventory, shown
+       * only in that one case - under a selection it would describe the tenant, not the focus.
+       */
+      const beyond = !selectedId && kind === "service" ? nodes.filter((node) => node.kind === "service" && !node.virtual).length - drawn.length : 0;
+      built.set(kind, { kind, drawn, hidden: related.length - drawn.length, beyond });
     }
     // Back into canvas order: the layout indexes columns by their position on screen.
-    return (Object.keys(columnX) as TopologyNode["kind"][]).map((kind) => built.get(kind) ?? { kind, drawn: [], hidden: 0 });
-  }, [anchorKind, compare, hops, neighbours, nodes]);
+    return (Object.keys(columnX) as TopologyNode["kind"][]).map((kind) => built.get(kind) ?? { kind, drawn: [], hidden: 0, beyond: 0 });
+  }, [anchorKind, compare, hops, neighbours, nodes, selectedId]);
   /**
    * Rows are assigned per column, then nudged so that an edge which skips a column has a clear
    * corridor through it.
@@ -417,11 +428,10 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
     return node.kind === kind && node.virtual && position ? Math.max(lowest, position.y - NODE_HEIGHT / 2 + bands.heightOf(node.id)) : lowest;
   }, 0);
   // Each column holds one node per entity, so the canvas has to grow instead of clipping them.
-  const canvasHeight = Math.max(430, FIRST_ROW_Y + layout.rows * ROW_HEIGHT + (columns.some((column) => column.hidden > 0) ? 34 : 0), virtualBottom("rum") + 50);
+  const canvasHeight = Math.max(430, FIRST_ROW_Y + layout.rows * ROW_HEIGHT + (columns.some((column) => column.hidden > 0 || column.beyond > 0) ? 34 : 0), virtualBottom("rum") + 50);
   const selectNode = (node: TopologyNode) => {
-    const nextId = selectedId === node.id ? null : node.id;
-    setSelectedId(nextId);
-    onSelectionChange(nextId ? node : null);
+    // A second click on the selected node clears the selection.
+    onSelectionChange(selectedId === node.id ? null : node);
   };
   /**
    * Every relationship edge is drawn at the same weight; only measured edges become bands.
@@ -530,7 +540,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, onSelectionChange }: Topol
             <title>{describeEdge(edge)}</title>
           </g>;
         })}
-        {columns.map(({ kind, hidden }, column) => hidden > 0 && <text key={`overflow-${kind}`} x={columnX[kind]} y={Math.max(FIRST_ROW_Y + layout.overflowRow[column] * ROW_HEIGHT - 8, virtualBottom(kind) + 22)} textAnchor="middle" className="topology-overflow-label">+{hidden} more not drawn</text>)}
+        {columns.map(({ kind, hidden, beyond }, column) => (hidden > 0 || beyond > 0) && <text key={`overflow-${kind}`} x={columnX[kind]} y={Math.max(FIRST_ROW_Y + layout.overflowRow[column] * ROW_HEIGHT - 8, virtualBottom(kind) + 22)} textAnchor="middle" className="topology-overflow-label">{beyond > 0 ? `+${beyond.toLocaleString()} more services · find them with search or sort` : `+${hidden} more not drawn`}</text>)}
         {drawnNodes.map((node) => {
           const position = positions.get(node.id);
           if (!position) return null;
