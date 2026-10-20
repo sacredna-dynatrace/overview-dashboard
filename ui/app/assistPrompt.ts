@@ -1,8 +1,8 @@
-import { getLanguage } from "@dynatrace-sdk/user-preferences";
+import { getLanguage, getRegionalFormat } from "@dynatrace-sdk/user-preferences";
 import type { BlastProblem } from "./hooks/useBlastRadiusData";
 
 /**
- * "Explain problem", the way the Problems app does it: Dynatrace Assist declares an `ask-question`
+ * "Analyze problem" - the Problems app's "Explain problem", asking for more: Dynatrace Assist declares an `ask-question`
  * intent (manifest of `dynatrace.davis.copilot` on isb54165) that opens as an overlay panel and,
  * with `execute`, runs the prompt straight away. No `contexts` are sent: the accepted context types
  * are not documented, and the prompt names the problem and its entities outright.
@@ -19,23 +19,53 @@ export const ANALYSIS_LEAD_MINUTES = 30;
 const PROMPT_ENTITY_LIMIT = 10;
 
 /**
- * The user's preferred language as an English name ("Korean"), or null for English or anything
- * unreadable.
+ * The language Assist is asked to answer in, chosen next to the button.
  *
- * Sent from this app, Assist answered in English where the Problems app got Korean for the same user
- * and prompt - whatever the Problems app passes along, this app does not - so the language is asked
- * for explicitly. Read through Intl so `ko` and `ko-KR` both work; the SDK does not document which
- * form it returns, and outside the Dynatrace runtime it may throw.
+ * Why the prompt has to say it: the Korean answers came from the user's Assist personalization
+ * ("Please provide answer in Korean"), not from their Dynatrace language, which is English - and
+ * the first prompt this app sends to a freshly opened Assist panel is answered before that
+ * personalization applies, so it came back in English while later ones were Korean. The app cannot
+ * read Assist's settings, so the user picks the language here and the prompt states it.
  */
-export const answerLanguage = (): string | null => {
+export type AnswerLanguage = "ko" | "en" | "auto";
+export const ANSWER_LANGUAGES: { value: AnswerLanguage; label: string }[] = [
+  { value: "ko", label: "한국어" },
+  { value: "en", label: "English" },
+  { value: "auto", label: "Auto" },
+];
+/** Korean by default: the reason the selector exists is that answers did not come back in Korean. */
+export const DEFAULT_ANSWER_LANGUAGE: AnswerLanguage = "ko";
+
+/** "ko-KR" to "Korean"; null for English, empty or unreadable codes. */
+const nonEnglishName = (code: string | undefined): string | null => {
+  if (!code || /^en([-_]|$)/i.test(code)) return null;
   try {
-    const code = getLanguage();
-    if (!code || /^en([-_]|$)/i.test(code)) return null;
     // The base language only: "Korean", not "Korean (South Korea)".
     return new Intl.DisplayNames(["en"], { type: "language" }).of(code.split(/[-_]/)[0]) ?? null;
   } catch {
     return null;
   }
+};
+const safely = (read: () => string): string | undefined => {
+  try { return read(); } catch { return undefined; }
+};
+
+/**
+ * The language to put in the prompt, as an English name, or null to say nothing.
+ *
+ * "auto" looks at the Dynatrace language, then the regional format, then the browser, and takes the
+ * first that is not English; English everywhere means no instruction. The explicit choices always
+ * state the language - "English" included, so it wins over a Korean Assist personalization.
+ */
+export const answerLanguage = (choice: AnswerLanguage): string | null => {
+  if (choice === "ko") return "Korean";
+  if (choice === "en") return "English";
+  const candidates = [safely(getLanguage), safely(getRegionalFormat), typeof navigator === "undefined" ? undefined : navigator.language];
+  for (const code of candidates) {
+    const name = nonEnglishName(code);
+    if (name) return name;
+  }
+  return null;
 };
 
 /** Minute precision in UTC, the way Assist and DQL read timestamps. */
@@ -57,7 +87,7 @@ const describeEntity = (id: string) => id;
  * trace queries at the right place; the requested structure asks for evidence and the DQL behind it,
  * and for "not supported by the data" instead of a guess.
  */
-export const explainPrompt = (problem: BlastProblem, language: string | null = answerLanguage()): string => {
+export const explainPrompt = (problem: BlastProblem, language: string | null): string => {
   const start = Date.parse(problem.start);
   const end = Date.parse(problem.end);
   const hasWindow = Number.isFinite(start);

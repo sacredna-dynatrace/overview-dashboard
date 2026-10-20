@@ -2,16 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import type { Timeframe } from "@dynatrace/strato-components/core";
 import { TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS } from "@dynatrace/strato-components/filters";
 import { Markdown } from "@dynatrace/strato-components/content";
-import { IntentButton } from "@dynatrace/strato-components/buttons";
+import { Button } from "@dynatrace/strato-components/buttons";
+import { sendIntent } from "@dynatrace-sdk/navigation";
 import { SearchInput, Select, ToggleButtonGroup } from "@dynatrace/strato-components/forms";
-import { ExternalLinkIcon } from "@dynatrace/strato-icons";
+import { AiIcon, ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { BlastRadiusGraph, buildBlastLayout, type BlastLayout, type BlastLinkOf } from "../components/BlastRadiusGraph";
 import { RefreshControl } from "../components/RefreshControl";
 import { StatusIcon } from "../components/StatusMark";
 import { buildEntityLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
 import { useBlastRadiusData, useProblemDescription, type BlastProblem, type BlastQueryKey } from "../hooks/useBlastRadiusData";
 import { paletteVars } from "../theme/colors";
-import { ASSIST_INTENT, explainPrompt } from "../assistPrompt";
+import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, type AnswerLanguage } from "../assistPrompt";
 
 /** Today, as on the topology page; a week of problems is one preset away. */
 const initialTimeframe: Timeframe = {
@@ -104,6 +105,20 @@ const originLabel = (problem: BlastProblem) =>
     : problem.origin === "self" ? `Self: ${problem.originName ?? ""}`
     : `Events: ${eventsLabel(problem)}`;
 
+/** The answer language is remembered per browser; storage can be unavailable, so it is optional. */
+const LANGUAGE_KEY = "overview-dashboard.blast.answerLanguage";
+const readLanguage = (): AnswerLanguage => {
+  try {
+    const stored = window.localStorage.getItem(LANGUAGE_KEY);
+    return ANSWER_LANGUAGES.some((option) => option.value === stored) ? (stored as AnswerLanguage) : DEFAULT_ANSWER_LANGUAGE;
+  } catch {
+    return DEFAULT_ANSWER_LANGUAGE;
+  }
+};
+const storeLanguage = (language: AnswerLanguage) => {
+  try { window.localStorage.setItem(LANGUAGE_KEY, language); } catch { /* the choice just is not remembered */ }
+};
+
 type StatusFilter = "all" | "open" | "closed";
 type ProblemSort = "newest" | "oldest" | "impact";
 const SORT_OPTIONS: { value: ProblemSort; label: string; hint: string }[] = [
@@ -124,8 +139,17 @@ const matchesSearch = (problem: BlastProblem, needle: string) => {
 };
 
 /** Opens Dynatrace Assist with a prompt built from what this page knows about the problem. */
-const ExplainButton = ({ problem }: { problem: BlastProblem }) =>
-  <IntentButton payload={{ prompt: explainPrompt(problem), execute: true }} options={ASSIST_INTENT} showMenu={false} size="condensed">Explain problem</IntentButton>;
+/**
+ * The prompt is built when the button is pressed, not when the page renders. `getLanguage()` returns
+ * "en" until the Dynatrace runtime has loaded the user's preferences, and an `IntentButton` carries
+ * the payload from its last render - so the first click after the page loaded sent a prompt without
+ * "Please answer in Korean" and Assist answered in English, while later clicks were Korean.
+ */
+const AnalyzeButton = ({ problem, language }: { problem: BlastProblem; language: AnswerLanguage }) =>
+  <Button size="condensed" onClick={() => sendIntent({ prompt: explainPrompt(problem, answerLanguage(language)), execute: true }, ASSIST_INTENT)}>
+    <Button.Prefix><AiIcon /></Button.Prefix>
+    Analyze problem
+  </Button>;
 
 /** Davis repeats the problem title as a top-level heading; the panel already shows it. */
 const withoutTitle = (markdown: string) => markdown.replace(/^\s*#\s+[^\n]*\n+/, "");
@@ -160,6 +184,8 @@ export const BlastRadius = () => {
 
   const categories = useMemo(() => [...new Set(problems.map((problem) => problem.category))].sort(), [problems]);
   const [status, setStatus] = useState<StatusFilter>("all");
+  const [language, setLanguage] = useState<AnswerLanguage>(readLanguage);
+  const chooseLanguage = (value: AnswerLanguage) => { setLanguage(value); storeLanguage(value); };
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<ProblemSort>("newest");
   /**
@@ -268,7 +294,13 @@ export const BlastRadius = () => {
             <p>{selected.displayId} · {selected.active ? "Open" : "Closed"} · {formatWhen(selected.start)} · {formatDuration(selected.start, selected.end)}</p>
             <div className="panel-links blast-actions">
               {problemLink && <a href={problemLink} target="_blank" rel="noopener noreferrer">Open {selected.displayId} in Problems <ExternalLinkIcon /></a>}
-              <ExplainButton problem={selected} />
+              <AnalyzeButton problem={selected} language={language} />
+              <Select name="answer-language" aria-label="Answer language for Assist" value={language} onChange={(value) => { if (value) chooseLanguage(value); }}>
+                <Select.Trigger />
+                <Select.Content>
+                  {ANSWER_LANGUAGES.map((option) => <Select.Option key={option.value} value={option.value}>{option.label}</Select.Option>)}
+                </Select.Content>
+              </Select>
             </div>
           </div></div>
           {/* Keyed by problem so the rings unfold again on every selection. */}
@@ -304,7 +336,7 @@ export const BlastRadius = () => {
           <span>Confirmed affected</span>
           <div className="workload-pods">{selected.affected.map((entity) => <div className="workload-pod" key={entity.id}><StatusIcon problem />{entityName(entity.id, entity.name)}<b>{ENTITY_KO[entityType(entity.id)] ?? entityType(entity.id).toLowerCase()}</b></div>)}</div>
           <hr />
-          <div className="blast-analysis-heading"><span>Davis 분석</span><ExplainButton problem={selected} /></div>
+          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} /></div>
           <div className="blast-description">
             {description.isLoading ? <p>Davis 분석을 불러오는 중…</p>
               : description.error ? <p>분석을 불러오지 못했습니다: {description.error}</p>

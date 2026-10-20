@@ -521,11 +521,12 @@ RUM on that tenant while Davis still counts users. It is a real user count, not 
   looked up through `id_classic` across K8S_DEPLOYMENT/STATEFULSET/DAEMONSET/CRONJOB/JOB. Types without
   a verified link (process group, custom device, …) are not linked.
 
-### Explain problem (Dynatrace Assist)
+### Analyze problem (Dynatrace Assist)
 
 Dynatrace Assist (`dynatrace.davis.copilot`) declares an intent `ask-question` (`addonMode: overlay`;
 properties `prompt` required, `execute` boolean, `contexts` [{type, value}]), read from its manifest
-with `dtctl get app dynatrace.davis.copilot`. The page sends it through Strato `IntentButton` with
+with `dtctl get app dynatrace.davis.copilot`. The page sends it with `sendIntent` from a Strato `Button`,
+building the prompt **at click time**, with
 `options: { recommendedAppId, recommendedIntentId }` - the three-argument `sendIntent` is deprecated
 and fails lint - and the Problems app's own prompt. **Assist does not follow the user's language for
 this app**: the same user and prompt got Korean from the Problems app and English from here. So the
@@ -542,6 +543,17 @@ again. It asks for logs, metrics, traces and events from 30 minutes before the s
 bounded on purpose, since an unbounded "all relevant data" invites broad log scans - and for a
 timeline, evidence with the DQL used, impact, remediation and prevention, and "not supported by the
 data" rather than a guess. Longest prompt on isb54165: 1,301 characters (31 affected entities).
+
+**`getLanguage()` returns "en" until the runtime is ready.** The SDK falls back to "en" (with a
+console warning) when `dtRuntime.userPreferences` is not there yet. With `IntentButton` the payload
+was computed at render, so the first click after load sent no language line and Assist answered in
+English; later clicks, after a re-render, were Korean. Reading it on click was not the whole story:
+the user's Dynatrace language **is** English, and the Korean answers came from their **Assist
+personalization** (custom instruction "Please provide answer in Korean"), which the app cannot read
+and which the first prompt sent to a freshly opened Assist panel is answered without. So the page
+has an answer-language selector (한국어 / English / Auto, default 한국어, remembered in localStorage) and
+the prompt always states the language for the explicit choices. Auto tries the Dynatrace language,
+then the regional format, then the browser, and says nothing if all are English.
 
 ## Davis analyzers (the forecast finding)
 
