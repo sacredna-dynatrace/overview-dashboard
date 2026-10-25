@@ -165,14 +165,9 @@ export const explainPrompt = (problem: BlastProblem, language: string | null, sc
    * dt.frontend.user_action.duration had risen to 4.9 s (bby34718).
    */
   const apps = [...new Set([problem.originId ?? "", ...problem.affected.map((entity) => entity.id)].filter((id) => id.startsWith("APPLICATION-")))];
-  const sources = apps.length > 0
-    ? [
-      "Steps: 1) RUM user events first, 2) then dt.frontend metrics, 3) then the backend services it calls.",
-      `RUM: fetch user.events filtered by dt.rum.application.entity in (${list(apps)}) (characteristics.classifier: user_action, request, error, navigation). Metrics are dt.frontend.* (e.g. dt.frontend.user_action.duration, dt.frontend.request.duration, dt.frontend.error.count), split by dt.rum.application.entity - there are no dt.rum.* metrics.`,
-      // Assist binned user.events by event.start, which does not exist there (0 of 16,711 records on
-      // bby34718), got one aggregate and called it a platform limit.
-      "user.events time field is start_time (no event.start); use duration for timing.",
-    ]
+  const rum = apps.length > 0;
+  const sources = rum
+    ? [`Steps: 1) fetch user.events where dt.rum.application.entity in (${list(apps)}), 2) dt.frontend.* metrics, 3) the backend services it calls.`]
     : [
       "Steps: 1) error logs first, 2) then metrics, traces and events.",
       where
@@ -185,19 +180,27 @@ export const explainPrompt = (problem: BlastProblem, language: string | null, sc
     `${origin} ${affected}`.trim(),
     hasWindow ? `Window: ${isoMinute(start - ANALYSIS_LEAD_MINUTES * 60_000)} (${ANALYSIS_LEAD_MINUTES} min before start) to ${problem.active ? "now" : "end"}.` : "",
     ...sources,
-    // Assist guessed OpenTelemetry-style names that do not exist here - status.code on spans and a
-    // dt.service.request.failure_rate metric - got zero rows without an error and reported "no data".
-    // The names below are verified (diw85600); the rule after them covers the names nobody listed. It
-    // says how to check, because span.status_code is set only on failed spans: a one-record sample
-    // of a healthy span would "prove" the field missing.
-    "Spans: failed = span.status_code == \"error\" or request.is_failed == true (no status.code field).",
-    "Service metrics: dt.service.request.count, dt.service.request.failure_count, dt.service.request.response_time; failure rate = failure_count / count (no failure_rate metric).",
-    // A 94% failing "service" (mdpt.co.kr) had no spans in three days: it is an external domain the app
-    // calls, and its spans are client spans on the caller (PaymentAuthenticationController, by
-    // server.address). Its name was only in the classic model, not in Smartscape.
-    "External services (WEB_REQUEST_SERVICE with no process) have no spans of their own: find their calls as client spans on the calling service, by server.address.",
-    "Entity names: use dt.entity.* (e.g. fetch dt.entity.service | fields entity.name) when Smartscape has no node.",
-    "Do not guess field or metric names. Before treating a 0-record result as evidence, check the field has values with countIf(isNotNull(<field>)), not a one-record sample; zero rows on a nonexistent field prove nothing.",
+    // Assist guessed names that do not exist - status.code on spans, dt.service.request.failure_rate,
+    // dt.rum.* metrics, event.start on user.events - got zero rows without an error and reported "no
+    // data". Names differ per tenant, so the prompt says how to look them up rather than listing them
+    // all; each method was checked on bby34718, isb54165 and diw85600. fieldsSummary is ruled out: it
+    // counts records, and reported the absent event.start on all 14,922. A one-record sample fails too,
+    // because span.status_code is set only on failed spans. No angle brackets: the Assist panel strips
+    // them as markup, and "isNotNull(<field>)" arrived as "isNotNull()".
+    "Verify names first - they differ per tenant, and a wrong field or metric returns 0 rows without an error:",
+    "- Fields: fetch the source in the window | limit 1 | fieldsKeep \"*keyword*\".",
+    "- Values: countIf(isNotNull(fieldname)) over the window - not fieldsSummary (counts records, so absent fields look full), not a 1-record sample.",
+    `- Metrics and dimensions: fetch metric.series | filter startsWith(metric.key, "${rum ? "dt.frontend." : "dt.service."}").`,
+    // Verified facts that Assist got wrong. The external-service one: a 94% failing "service"
+    // (mdpt.co.kr) had no spans in three days - it is a domain the app calls, seen only as client spans
+    // on the caller, and its name was only in the classic model.
+    `Known here: ${[
+      rum ? "user.events time = start_time" : "",
+      "failed span = span.status_code == \"error\" or request.is_failed == true",
+      "failure rate = dt.service.request.failure_count / dt.service.request.count",
+      "external services (WEB_REQUEST_SERVICE, no process) appear only as client spans on the caller, by server.address",
+      "names missing from Smartscape are in dt.entity.*",
+    ].filter(Boolean).join("; ")}.`,
     "Answer: checks run (filter, range, record count incl. 0); timeline from the earliest anomaly; root cause with evidence and DQL; impact; remediation; prevention. Say so if the data does not support a conclusion.",
     zone ? `Times in ${zone}${offset ? ` (${offset})` : ""}.` : "",
     language ? `Answer in ${language}.` : "",

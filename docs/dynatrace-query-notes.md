@@ -612,6 +612,22 @@ query, not the data:
 Each is now a line of the prompt (the `start_time` one only on the RUM branch). Prompt length on
 bby34718: 1,550-1,700 characters for service problems, 1,836 for the RUM one.
 
+**Let Assist look names up instead of listing them.** Field and metric names differ per tenant
+(log levels: only `NONE` on bby34718 in that window, `ERROR` on isb54165), and a wrong name returns
+zero rows with no error - `timeseries avg(dt.rum.user_action.duration)` returns an empty result. So
+the prompt gives three lookup methods, checked on bby34718, isb54165 and diw85600:
+- field names: `fetch … | limit 1 | fieldsKeep "*keyword*"` (wildcards work);
+- values: `countIf(isNotNull(field))` over the window;
+- metric keys and their dimensions: `fetch metric.series | filter startsWith(metric.key, "dt.frontend.")`.
+
+**`fieldsSummary` cannot show a field is missing.** On `user.events` it reported `event.start` with
+`count` 14,922 - every record - although the field does not exist there; it counts records, not
+values. Use `countIf(isNotNull(...))`.
+
+**Assist strips angle brackets.** The prompt line `countIf(isNotNull(<field>))` arrived in the Assist
+panel as `countIf(isNotNull())` - `<field>` was taken as markup. Prompt text uses no `<word>` forms.
+After the rewrite: 1,473 characters for the RUM problem, 1,537-1,687 for service problems.
+
 ## Davis analyzers (the forecast finding)
 
 `@dynatrace-sdk/client-davis-analyzers` takes a DQL timeseries expression directly, so the forecast
