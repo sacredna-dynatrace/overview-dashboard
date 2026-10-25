@@ -555,6 +555,63 @@ has an answer-language selector (한국어 / English / Auto, default 한국어, 
 the prompt always states the language for the explicit choices. Auto tries the Dynatrace language,
 then the regional format, then the browser, and says nothing if all are English.
 
+**Times.** Assist answers in the zone the prompt uses, so a UTC prompt produced a UTC timeline while the
+page shows local time. The prompt keeps UTC for the window (what Assist queries with) and adds the
+browser's local time beside it - "2026-10-20T02:00Z (2026-10-20 11:00 Asia/Seoul)" - then asks for all
+times in that zone with its offset at the problem's start (daylight saving included). A UTC browser
+gets no zone line. The browser zone is used, not the Dynatrace user setting, by the user's choice.
+
+**Same problem, two root causes.** Two Assist runs on one problem disagreed: one filtered logs by
+`dt.entity.service`, got zero records and blamed DB pool exhaustion from metrics; the other filtered by
+`k8s.namespace.name`, found 1,671 ERROR logs (PSQLException, "canceling statement") starting 26 minutes
+before the problem, and named a query bug. **Logs carry no service id** - none of a 15-minute sample on
+isb54165 had `dt.entity.service`; most had `k8s.namespace.name` - and log levels vary (ERROR, SEVERE,
+EMERGENCY, NONE). Assist cannot be made deterministic from an intent, so the prompt makes the evidence
+the same: it says not to filter logs by service, lists the scope to filter on (the problem's
+`k8s.namespace.name` / `k8s.workload.name` / `k8s.cluster.name` / `dt.entity.process_group`, set on 53
+of 333 problems, plus the hosts and process instances of the services involved), defines what counts as
+an error, and requires the checks run with their record counts (zero included) and the earliest anomaly
+before the start. If runs still diverge, the next step is the app querying a fixed evidence set itself
+and passing the summary.
+
+**Compact prompt.** That prompt reached ~2,500 characters, mostly duplicated ids. It now names **one**
+log scope - namespace and workload, else process group, else host - since several scopes let Assist pick
+a broad one (a host) and drift; process instance ids are dropped (same logs as their process group);
+lists stop at 5; times are UTC with one "Times in <zone>" line; rules are terse; and error logs are
+checked first. On isb54165 (333 problems) prompts are 765-941 characters, median 826.
+
+**Guessed names read as "no data".** Assist reported no error spans and no failure-rate series for a
+service that had 42 failed spans in the window (diw85600). It had filtered spans by `status.code` and
+queried `dt.service.request.failure_rate` - neither exists, and both return zero rows without an error.
+Verified names: failed spans are `span.status_code == "error"` / `request.is_failed == true`
+(`span.status_code` is set **only on failed spans**); the service request metrics are
+`dt.service.request.count`, `.failure_count`, `.response_time` (no failure-rate metric). The prompt
+now states those, plus a general rule: do not guess names, and before treating zero rows as evidence
+check the field has values with `countIf(isNotNull(...))` - a one-record sample of a healthy span would
+"prove" `span.status_code` missing. Prompts: 1,279-1,429 characters.
+
+**Web application problems (bby34718).** A problem on `APPLICATION-34EA…` (www.inflight.koreanair.com)
+had no link and an Assist answer of "no RUM data", while `user.events` held 13,996 requests, 547 user
+actions and 479 errors for it in the window and `dt.frontend.user_action.duration` rose to 4.9 s. Assist
+had followed the log-first prompt (logs carry no frontend id) and guessed `dt.rum.user_action.duration`;
+new RUM metrics are `dt.frontend.*`, split by `dt.rum.application.entity` (also `dt.smartscape.frontend`,
+`frontend.name`). Problems naming an `APPLICATION-…` now get a RUM-first prompt instead of the log lines.
+The link goes to the frontend app on the problem: `FRONTEND-…` via `smartscapeNodes FRONTEND` `id_classic`
+(hex differs from the APPLICATION id), with the problem's from/to and `problemId` = its event id.
+
+**Assist's "data limitations" on P-2610775 (bby34718), checked.** Three claims in its answer were the
+query, not the data:
+- *"`user.events` cannot be binned by `event.start`"* - the field does not exist there (0 of 16,711
+  records); the time field is `start_time`, present on every record. Timing is `duration`.
+- *"No spans for SERVICE-D3AF…"* - true, and expected: it is `mdpt.co.kr`, a `WEB_REQUEST_SERVICE`
+  with no process group, i.e. an external domain the app calls. Its calls are client spans on the
+  caller, found by `server.address`: 333 from PaymentAuthenticationController to
+  `mcoupon.mdpt.co.kr`, 314 failed - matching the service's 94.6% failure rate (15,200 / 16,064).
+- *"Service name unknown"* - Smartscape has no node for it; the name is only in classic
+  `dt.entity.service` (`entity.name`).
+Each is now a line of the prompt (the `start_time` one only on the RUM branch). Prompt length on
+bby34718: 1,550-1,700 characters for service problems, 1,836 for the RUM one.
+
 ## Davis analyzers (the forecast finding)
 
 `@dynatrace-sdk/client-davis-analyzers` takes a DQL timeseries expression directly, so the forecast

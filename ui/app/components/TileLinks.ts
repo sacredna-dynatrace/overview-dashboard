@@ -148,3 +148,19 @@ export const buildProcessLink = (processGroupInstanceId: string, timeframe: Time
 
 export const buildWorkloadLink = (smartscapeWorkloadId: string, timeframe: Timeframe): string =>
   `${environment()}/ui/apps/${"dynatrace.kubernetes"}/smartscape/workload/${"K8S_WORKLOAD"}?perspective=Health&detailsId=${encodeURIComponent(smartscapeWorkloadId)}&${timeframeParam(timeframe)}`;
+
+/**
+ * A frontend in the frontend app, focused on one problem - the form the app itself uses on bby34718:
+ * the frontend's overview page with from, to and problemId (the problem's event id) parameters. The
+ * window is the problem's, not the page's, so the app opens on the incident rather than on a whole day.
+ */
+export const buildProblemFrontendLink = (frontendId: string, problem: { start: string; end: string; eventId: string; active: boolean }): string => {
+  const iso = (value: string) => {
+    const time = Date.parse(value);
+    return Number.isFinite(time) ? new Date(time).toISOString() : "";
+  };
+  const from = iso(problem.start);
+  const to = problem.active ? "now()" : iso(problem.end) || from;
+  const query = [from && `from=${encodeURIComponent(from)}`, to && `to=${encodeURIComponent(to)}`, problem.eventId && `problemId=${encodeURIComponent(problem.eventId)}`].filter(Boolean).join("&");
+  return `${environment()}/ui/apps/${"dynatrace.experience.vitals"}/frontends/${encodeURIComponent(frontendId)}/overview${query ? `?${query}` : ""}`;
+};

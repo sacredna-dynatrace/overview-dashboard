@@ -5,7 +5,7 @@ import { resolveTimeframe, type ResolvedTimeframe } from "./useTopologyData";
 
 type DqlRecord = Record<string, unknown>;
 
-export type BlastQueryKey = "problems" | "services" | "frontends" | "workloads";
+export type BlastQueryKey = "problems" | "services" | "frontends" | "workloads" | "frontendIds";
 
 /**
  * How a problem's origin reads, from what Davis recorded (verified on isb54165, 30 days):
@@ -45,6 +45,13 @@ export type BlastProblem = {
   originName: string | null;
   /** Distinct hosts Davis attached to the problem, for describing concurrent events. */
   hostCount: number;
+  /**
+   * Where the problem's logs live, as Davis recorded it: Kubernetes namespaces, workloads and
+   * clusters, and process groups. Logs here carry no service id (none of a 15-minute sample on
+   * isb54165 did), so these are what an Assist log query has to filter on. Empty for problems
+   * Davis tied only to services.
+   */
+  scope: { namespaces: string[]; workloads: string[]; clusters: string[]; processGroups: string[] };
 };
 
 export type ServiceInfo = { id: string; name: string; type: string; calledBy: string[]; hosts: string[]; pgis: string[] };
@@ -56,7 +63,8 @@ const PROBLEM_LIMIT = 500;
 const SERVICE_LIMIT = 25000;
 const FRONTEND_LIMIT = 5000;
 const WORKLOAD_LIMIT = 25000;
-export const BLAST_CAPS: Record<BlastQueryKey, number> = { problems: PROBLEM_LIMIT, services: SERVICE_LIMIT, frontends: FRONTEND_LIMIT, workloads: WORKLOAD_LIMIT };
+const FRONTEND_ID_LIMIT = 25000;
+export const BLAST_CAPS: Record<BlastQueryKey, number> = { problems: PROBLEM_LIMIT, services: SERVICE_LIMIT, frontends: FRONTEND_LIMIT, workloads: WORKLOAD_LIMIT, frontendIds: FRONTEND_ID_LIMIT };
 
 const timeWindow = (timeframe: ResolvedTimeframe) => `from: "${timeframe.from}", to: "${timeframe.to}"`;
 
@@ -73,7 +81,9 @@ const problemsQuery = (timeframe: ResolvedTimeframe) => `fetch dt.davis.problems
     start = min(event.start), end = max(event.end),
     root = takeLast(root_cause_entity_id), root_name = takeLast(root_cause_entity_name),
     affected = takeLast(affected_entity_ids), affected_names = takeLast(affected_entity_names),
-    users = takeLast(dt.davis.affected_users_count), hosts = takeLast(dt.entity.host)
+    users = takeLast(dt.davis.affected_users_count), hosts = takeLast(dt.entity.host),
+    k8s_namespaces = takeLast(k8s.namespace.name), k8s_workloads = takeLast(k8s.workload.name),
+    k8s_clusters = takeLast(k8s.cluster.name), process_groups = takeLast(dt.entity.process_group)
   }, by: { display_id }
 | fieldsAdd host_count = arraySize(arrayDistinct(hosts))
 | fieldsAdd n_affected = arraySize(affected), active = status == "ACTIVE"
@@ -103,6 +113,16 @@ const workloadsQuery = (timeframe: ResolvedTimeframe) => `smartscapeNodes K8S_DE
 | filter isNotNull(id_classic)
 | fields id = toString(id), classic = toString(id_classic)
 | limit ${WORKLOAD_LIMIT}`;
+
+/**
+ * Classic RUM application ids to Smartscape FRONTEND ids, for links into the frontend app. Problems
+ * name a web application `APPLICATION-…`; the frontend app opens `FRONTEND-…`, and the hex parts
+ * differ (APPLICATION-34EA… is FRONTEND-89A1… on bby34718), so only `id_classic` connects them.
+ */
+const frontendIdsQuery = (timeframe: ResolvedTimeframe) => `smartscapeNodes FRONTEND, ${timeWindow(timeframe)}
+| filter isNotNull(id_classic)
+| fields id = toString(id), classic = toString(id_classic)
+| limit ${FRONTEND_ID_LIMIT}`;
 
 /** RUM applications calling services: the outermost ring, where the end users are. */
 const frontendsQuery = (timeframe: ResolvedTimeframe) => `smartscapeEdges calls, ${timeWindow(timeframe)}
@@ -138,11 +158,13 @@ export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number) =>
     services: servicesQuery(resolved),
     frontends: frontendsQuery(resolved),
     workloads: workloadsQuery(resolved),
+    frontendIds: frontendIdsQuery(resolved),
   }), [resolved]);
   const problems = useDql({ query: queries.problems, ...QUERY_LIMITS });
   const services = useDql({ query: queries.services, ...QUERY_LIMITS });
   const frontends = useDql({ query: queries.frontends, ...QUERY_LIMITS });
   const workloads = useDql({ query: queries.workloads, ...QUERY_LIMITS });
+  const frontendIds = useDql({ query: queries.frontendIds, ...QUERY_LIMITS });
 
   const problemList = useMemo<BlastProblem[]>(() => records(problems.data).flatMap((record) => {
     const displayId = text(record, "display_id");
@@ -170,6 +192,12 @@ export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number) =>
       originId: origin === "root" ? rootId : origin === "self" ? affected[0].id : null,
       originName: origin === "root" ? rootName : origin === "self" ? affected[0].name : null,
       hostCount: optionalNumber(record, "host_count") ?? 0,
+      scope: {
+        namespaces: strings(record, "k8s_namespaces"),
+        workloads: strings(record, "k8s_workloads"),
+        clusters: strings(record, "k8s_clusters"),
+        processGroups: strings(record, "process_groups"),
+      },
     }];
   }), [problems.data]);
 
@@ -191,7 +219,14 @@ export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number) =>
     return classic && id ? [[classic, id] as const] : [];
   })), [workloads.data]);
 
-  const counts: Record<BlastQueryKey, number> = { problems: records(problems.data).length, services: records(services.data).length, frontends: records(frontends.data).length, workloads: records(workloads.data).length };
+  /** Classic `APPLICATION-…` to Smartscape `FRONTEND-…`. */
+  const frontendIdOf = useMemo(() => new Map<string, string>(records(frontendIds.data).flatMap((record) => {
+    const classic = text(record, "classic");
+    const id = text(record, "id");
+    return classic && id ? [[classic, id] as const] : [];
+  })), [frontendIds.data]);
+
+  const counts: Record<BlastQueryKey, number> = { problems: records(problems.data).length, services: records(services.data).length, frontends: records(frontends.data).length, workloads: records(workloads.data).length, frontendIds: records(frontendIds.data).length };
   return {
     queries,
     resolved,
@@ -199,12 +234,13 @@ export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number) =>
     services: serviceMap,
     frontendCalls,
     workloadIds,
+    frontendIdOf,
     isLoading: problems.isLoading || services.isLoading || frontends.isLoading,
     // Per query, as on the topology page: one failure does not blank the others.
-    errors: ([["Problems", problems.error], ["Service call graph", services.error], ["RUM-to-service", frontends.error], ["Workload ids", workloads.error]] as const)
+    errors: ([["Problems", problems.error], ["Service call graph", services.error], ["RUM-to-service", frontends.error], ["Workload ids", workloads.error], ["Frontend ids", frontendIds.error]] as const)
       .flatMap(([label, error]) => (error ? [{ label, message: error.message }] : [])),
     truncated: (Object.keys(counts) as BlastQueryKey[]).filter((key) => counts[key] > 0 && counts[key] >= BLAST_CAPS[key]),
-    refetch: async () => { await Promise.all([problems.refetch(), services.refetch(), frontends.refetch(), workloads.refetch()]); },
+    refetch: async () => { await Promise.all([problems.refetch(), services.refetch(), frontends.refetch(), workloads.refetch(), frontendIds.refetch()]); },
   };
 };
 

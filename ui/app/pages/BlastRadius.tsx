@@ -9,10 +9,11 @@ import { AiIcon, ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { BlastRadiusGraph, buildBlastLayout, type BlastLayout, type BlastLinkOf } from "../components/BlastRadiusGraph";
 import { RefreshControl } from "../components/RefreshControl";
 import { StatusIcon } from "../components/StatusMark";
-import { buildEntityLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
+import { buildEntityLink, buildProblemFrontendLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
 import { useBlastRadiusData, useProblemDescription, type BlastProblem, type BlastQueryKey } from "../hooks/useBlastRadiusData";
 import { paletteVars } from "../theme/colors";
-import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, type AnswerLanguage } from "../assistPrompt";
+import { ANSWER_LANGUAGES, ASSIST_INTENT, DEFAULT_ANSWER_LANGUAGE, answerLanguage, explainPrompt, type AnswerLanguage, type LogScope } from "../assistPrompt";
+import type { ServiceInfo } from "../hooks/useBlastRadiusData";
 
 /** Today, as on the topology page; a week of problems is one preset away. */
 const initialTimeframe: Timeframe = {
@@ -22,7 +23,7 @@ const initialTimeframe: Timeframe = {
 // Midnight-to-midnight of the previous day, matching the topology page.
 const yesterdayPreset = { from: "now()-1d@d", to: "now()@d" };
 
-const QUERY_LABELS: Record<BlastQueryKey, string> = { problems: "Problems", services: "Service call graph", frontends: "RUM-to-service", workloads: "Workload ids" };
+const QUERY_LABELS: Record<BlastQueryKey, string> = { problems: "Problems", services: "Service call graph", frontends: "RUM-to-service", workloads: "Workload ids", frontendIds: "Frontend ids" };
 
 const formatWhen = (iso: string) => {
   const time = Date.parse(iso);
@@ -145,8 +146,23 @@ const matchesSearch = (problem: BlastProblem, needle: string) => {
  * the payload from its last render - so the first click after the page loaded sent a prompt without
  * "Please answer in Korean" and Assist answered in English, while later clicks were Korean.
  */
-const AnalyzeButton = ({ problem, language }: { problem: BlastProblem; language: AnswerLanguage }) =>
-  <Button size="condensed" onClick={() => sendIntent({ prompt: explainPrompt(problem, answerLanguage(language)), execute: true }, ASSIST_INTENT)}>
+/**
+ * Where Assist should look for this problem's logs: the Kubernetes and process-group scope Davis
+ * recorded, plus the hosts of the services involved - the only scope a problem tied purely to
+ * services has.
+ */
+const logScopeOf = (problem: BlastProblem, services: Map<string, ServiceInfo>): LogScope => {
+  const serviceIds = [problem.originId, ...problem.affected.map((entity) => entity.id)].filter((id): id is string => Boolean(id?.startsWith("SERVICE-")));
+  const placed = serviceIds.flatMap((id) => { const service = services.get(id); return service ? [service] : []; });
+  const ids = (prefix: string) => problem.affected.map((entity) => entity.id).filter((id) => id.startsWith(prefix));
+  return {
+    ...problem.scope,
+    hosts: [...ids("HOST-"), ...placed.flatMap((service) => service.hosts)],
+  };
+};
+
+const AnalyzeButton = ({ problem, language, services }: { problem: BlastProblem; language: AnswerLanguage; services: Map<string, ServiceInfo> }) =>
+  <Button size="condensed" onClick={() => sendIntent({ prompt: explainPrompt(problem, answerLanguage(language), logScopeOf(problem, services)), execute: true }, ASSIST_INTENT)}>
     <Button.Prefix><AiIcon /></Button.Prefix>
     Analyze problem
   </Button>;
@@ -160,7 +176,7 @@ export const BlastRadius = () => {
   const [category, setCategory] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autoRefreshMs, setAutoRefreshMs] = useState<number | null>(null);
-  const { problems, services, frontendCalls, workloadIds, isLoading, errors, truncated, resolved, refetch } = useBlastRadiusData(timeframe, refreshedAt);
+  const { problems, services, frontendCalls, workloadIds, frontendIdOf, isLoading, errors, truncated, resolved, refetch } = useBlastRadiusData(timeframe, refreshedAt);
 
   /**
    * A relative timeframe resolves to new timestamps on a refresh, which reruns the queries by itself;
@@ -218,6 +234,11 @@ export const BlastRadius = () => {
     if (type === "CLOUD_APPLICATION") {
       const workload = workloadIds.get(id);
       return workload ? buildWorkloadLink(workload, timeframe) : null;
+    }
+    // A web application opens in the frontend app on the selected problem's window.
+    if (type === "APPLICATION") {
+      const frontend = frontendIdOf.get(id);
+      return frontend && selected ? buildProblemFrontendLink(frontend, selected) : null;
     }
     return null;
   };
@@ -294,7 +315,7 @@ export const BlastRadius = () => {
             <p>{selected.displayId} · {selected.active ? "Open" : "Closed"} · {formatWhen(selected.start)} · {formatDuration(selected.start, selected.end)}</p>
             <div className="panel-links blast-actions">
               {problemLink && <a href={problemLink} target="_blank" rel="noopener noreferrer">Open {selected.displayId} in Problems <ExternalLinkIcon /></a>}
-              <AnalyzeButton problem={selected} language={language} />
+              <AnalyzeButton problem={selected} language={language} services={services} />
               <Select name="answer-language" aria-label="Answer language for Assist" value={language} onChange={(value) => { if (value) chooseLanguage(value); }}>
                 <Select.Trigger />
                 <Select.Content>
@@ -336,7 +357,7 @@ export const BlastRadius = () => {
           <span>Confirmed affected</span>
           <div className="workload-pods">{selected.affected.map((entity) => <div className="workload-pod" key={entity.id}><StatusIcon problem />{entityName(entity.id, entity.name)}<b>{ENTITY_KO[entityType(entity.id)] ?? entityType(entity.id).toLowerCase()}</b></div>)}</div>
           <hr />
-          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} /></div>
+          <div className="blast-analysis-heading"><span>Davis 분석</span><AnalyzeButton problem={selected} language={language} services={services} /></div>
           <div className="blast-description">
             {description.isLoading ? <p>Davis 분석을 불러오는 중…</p>
               : description.error ? <p>분석을 불러오지 못했습니다: {description.error}</p>

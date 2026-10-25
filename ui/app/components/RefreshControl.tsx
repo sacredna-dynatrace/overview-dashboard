@@ -2,7 +2,6 @@ import React from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { Select } from "@dynatrace/strato-components/forms";
 import { Flex } from "@dynatrace/strato-components/layouts";
-import { Tooltip } from "@dynatrace/strato-components/overlays";
 import { Text } from "@dynatrace/strato-components/typography";
 import { RefreshAutoIcon, RefreshIcon } from "@dynatrace/strato-icons";
 
@@ -48,11 +47,12 @@ export const RefreshControl = ({ intervalMs, onIntervalChange, onRefresh, isRefr
           {INTERVALS.map((interval) => <Select.Option key={interval.value} value={interval.value}>{interval.label}</Select.Option>)}
         </Select.Content>
       </Select>
-      <Tooltip text="Refresh now">
-        <Button aria-label="Refresh now" onClick={onRefresh} loading={isRefreshing}>
-          <Button.Prefix><RefreshIcon /></Button.Prefix>
-        </Button>
-      </Tooltip>
+      {/* Emphasized and labelled like the controls beside it: as a bare icon in the default variant it
+          sat light on a light background, and people looked for a refresh button that was already there. */}
+      <Button variant="emphasized" aria-label="Refresh now" onClick={onRefresh} loading={isRefreshing}>
+        <Button.Prefix><RefreshIcon /></Button.Prefix>
+        Refresh
+      </Button>
     </Flex>
   );
 };
