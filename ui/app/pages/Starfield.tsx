@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@dynatrace/strato-components/buttons";
 import type { Timeframe } from "@dynatrace/strato-components/core";
 import { SegmentSelector, TimeframeSelector, useSegments } from "@dynatrace/strato-components/filters";
@@ -10,6 +10,8 @@ import { Tooltip } from "@dynatrace/strato-components/overlays";
 import { ExternalLinkIcon, RefreshAutoIcon, RefreshIcon } from "@dynatrace/strato-icons";
 import { useServiceTagOptions, useTagFilter } from "../components/SharedFilters";
 import { StarfieldCanvas, type StarScale, type StarSelection } from "../components/StarfieldCanvas";
+import { StarfieldOverview, type TimeSpan } from "../components/StarfieldOverview";
+import { useSpanRetentionDays, useStarfieldOverview } from "../hooks/useStarfieldOverview";
 import { TagControl } from "../components/TagControl";
 import { SETTLING_MS, STARFIELD_CAP, useStarfieldData, type StarPoint } from "../hooks/useStarfieldData";
 import { resolveTimeframe } from "../hooks/useTopologyData";
@@ -59,22 +61,47 @@ const traceLink = (point: StarPoint) => getIntentLink({ "trace.id": point.traceI
 
 const formatMs = (ms: number) => (ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms.toFixed(ms < 10 ? 1 : 0)} ms`);
 const formatTime = (epoch: number) => new Date(epoch).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const formatDateTime = (epoch: number) => new Date(epoch).toLocaleString(undefined, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const DAY_MS = 86_400_000;
+const dayOf = (epoch: number) => new Date(epoch).toDateString();
+const isToday = (epoch: number) => dayOf(epoch) === dayOf(Date.now());
+
+/**
+ * "1 of N" split by where the other N-1 went: stored 1/n is the agent's sampling (never recorded),
+ * read 1/n is this page's read ratio (stored, not read). Each part shows only when it applies.
+ */
+const samplingLabel = (text: StarfieldText, point: StarPoint) => {
+  const total = Math.round(point.multiplicity);
+  if (total <= 1) return "—";
+  const stored = Math.round(point.multiplicity / point.readRatio);
+  return text.samplingValue(total.toLocaleString(), stored > 1 ? stored.toLocaleString() : null, point.readRatio > 1 ? point.readRatio.toLocaleString() : null);
+};
 
 const columnsFor = (text: StarfieldText): DataTableColumnDef<StarPoint>[] => [
-  { id: "end", header: text.columnFinished, accessor: "end", cell: ({ value }) => <DataTable.DefaultCell>{formatTime(value as number)}</DataTable.DefaultCell> },
-  { id: "ms", header: text.columnResponseTime, accessor: "ms", alignment: "right", cell: ({ value }) => <DataTable.DefaultCell>{formatMs(value as number)}</DataTable.DefaultCell> },
-  { id: "failed", header: text.columnResult, accessor: (row) => (row.failed ? text.resultFailed : text.resultOk), cell: ({ rowData }) => <DataTable.DefaultCell>{rowData.failed ? <b className="star-failed">{text.resultFailed}</b> : text.resultOk}</DataTable.DefaultCell> },
-  { id: "service", header: text.columnService, accessor: "service" },
-  { id: "endpoint", header: text.columnEndpoint, accessor: "endpoint" },
-  { id: "multiplicity", header: text.columnSampling, accessor: "multiplicity", alignment: "right", cell: ({ value }) => <DataTable.DefaultCell>{Math.round(value as number) > 1 ? text.samplingValue(Math.round(value as number).toLocaleString()) : "—"}</DataTable.DefaultCell> },
-  { id: "trace", header: text.columnTrace, accessor: "traceId", cell: ({ rowData }) => <DataTable.DefaultCell><a className="star-trace-link" href={traceLink(rowData)} target="_blank" rel="noopener noreferrer">{text.open} <ExternalLinkIcon /></a></DataTable.DefaultCell> },
+  { id: "end", header: text.columnFinished, accessor: "end", width: 170, cell: ({ value }) => <DataTable.DefaultCell>{formatDateTime(value as number)}</DataTable.DefaultCell> },
+  { id: "ms", header: text.columnResponseTime, accessor: "ms", alignment: "right", width: 130, cell: ({ value }) => <DataTable.DefaultCell>{formatMs(value as number)}</DataTable.DefaultCell> },
+  { id: "failed", header: text.columnResult, width: 90, accessor: (row) => (row.failed ? text.resultFailed : text.resultOk), cell: ({ rowData }) => <DataTable.DefaultCell>{rowData.failed ? <b className="star-failed">{text.resultFailed}</b> : text.resultOk}</DataTable.DefaultCell> },
+  { id: "service", header: text.columnService, accessor: "service", width: "1fr", minWidth: 120 },
+  { id: "endpoint", header: text.columnEndpoint, accessor: "endpoint", width: "2fr", minWidth: 160 },
+  { id: "multiplicity", header: text.columnSampling, accessor: "multiplicity", alignment: "right", width: 240, cell: ({ rowData }) => <DataTable.DefaultCell>{samplingLabel(text, rowData)}</DataTable.DefaultCell> },
+  { id: "trace", header: text.columnTrace, accessor: "traceId", width: 90, cell: ({ rowData }) => <DataTable.DefaultCell><a className="star-trace-link" href={traceLink(rowData)} target="_blank" rel="noopener noreferrer">{text.open} <ExternalLinkIcon /></a></DataTable.DefaultCell> },
 ];
 
-/** The response time the slowest 1% of the points reach, for the keyboard route into the list. */
+/**
+ * The response time the slowest 1% of requests reach, for the keyboard route into the list. Weighted:
+ * in a sampled read the slow tail is read in full and the rest at 1 in N, so counting records would
+ * put the floor far too low.
+ */
 const slowestFloor = (points: StarPoint[]) => {
   if (points.length === 0) return 0;
-  const sorted = points.map((point) => point.ms).sort((a, b) => b - a);
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.01))];
+  const sorted = [...points].sort((a, b) => b.ms - a.ms);
+  const total = sorted.reduce((sum, point) => sum + point.multiplicity, 0);
+  let reached = 0;
+  for (const point of sorted) {
+    reached += point.multiplicity;
+    if (reached >= total * 0.01) return point.ms;
+  }
+  return sorted[sorted.length - 1].ms;
 };
 
 export const Starfield = () => {
@@ -88,30 +115,62 @@ export const Starfield = () => {
   const [selection, setSelection] = useState<StarSelection | null>(null);
   const [liveMs, setLiveMs] = useState<number | null>(null);
   const [columnVisibility, setColumnVisibility] = useState<DataTableColumnVisibilityState>(DEFAULT_COLUMN_VISIBILITY);
-  const followsNow = endsNow(timeframe);
+  // Held here, not in the table: the table unmounts when a selection is cleared, and widths a reader
+  // set should survive picking the next region.
+  const [columnSizing, setColumnSizing] = useState<Record<string, number>>({});
+  /** The fifteen minutes picked in the overview; null is the latest fifteen. */
+  const [slot, setSlot] = useState<TimeSpan | null>(null);
   const live = LIVE_INTERVALS.find((interval) => interval.ms === liveMs) ?? LIVE_INTERVALS[0];
+  const retentionDays = useSpanRetentionDays();
+  // Spans older than the bucket keeps cannot be drawn, so the timeframe starts no earlier.
+  const retentionStart = retentionDays === null ? null : refreshedAt - retentionDays * DAY_MS;
   const range = useMemo(() => {
     const resolved = resolveTimeframe(timeframe, refreshedAt);
     const end = Date.parse(resolved.to);
-    const start = Date.parse(resolved.from);
-    return { from: Math.max(start, end - MAX_WINDOW_MS), to: end, clamped: end - start > MAX_WINDOW_MS };
-  }, [refreshedAt, timeframe]);
+    const start = Math.min(end, Math.max(Date.parse(resolved.from), retentionStart ?? Number.NEGATIVE_INFINITY));
+    return { start, end, clamped: end - start > MAX_WINDOW_MS };
+  }, [refreshedAt, retentionStart, timeframe]);
+  const shown = slot ?? { from: Math.max(range.start, range.end - MAX_WINDOW_MS), to: range.end };
+  // Live follows the latest stretch of a timeframe that ends now; a picked stretch stays put.
+  const followsNow = endsNow(timeframe) && slot === null;
   const { tags, setTags } = useTagFilter();
   const { segments } = useSegments();
   const tagOptions = useServiceTagOptions();
   // A selection holds the field still: stars sliding under an open list would no longer match it.
-  const { points, from, to, isLoading, isUpdating, error, truncated } = useStarfieldData(range.from, range.to, followsNow, tags, liveMs, selection !== null);
+  const { points, from, to, ratio, slowFloorMs, isLoading, isUpdating, error, truncated } = useStarfieldData(shown.from, shown.to, followsNow, tags, liveMs, selection !== null);
 
-  const refresh = () => { setRefreshedAt(Date.now()); setSelection(null); };
+  /**
+   * The overview follows the services in the field, fixed per timeframe and tag choice: picking
+   * another stretch changes the stars but must not redraw the strip it was picked from.
+   */
+  const overviewKey = `${range.start}|${range.end}|${tags.join("\u0000")}`;
+  const [overviewServices, setOverviewServices] = useState({ key: "", ids: [] as string[] });
+  useEffect(() => {
+    if (!range.clamped || points.length === 0) return;
+    setOverviewServices((previous) => (previous.key === overviewKey ? previous
+      : { key: overviewKey, ids: [...new Set(points.map((point) => point.serviceId).filter(Boolean))].sort() }));
+  }, [overviewKey, points, range.clamped]);
+  const overview = useStarfieldOverview(range.start, range.end, overviewServices.key === overviewKey ? overviewServices.ids : [], range.clamped);
+  const pickSlot = (picked: TimeSpan) => {
+    setSelection(null);
+    // A stretch reaching the end of the timeframe is the latest one, which Live can follow.
+    setSlot(picked.to >= range.end - 1000 ? null : picked);
+  };
+  // A time alone reads as today: anything else - a past stretch, a timeframe across midnight -
+  // carries its date.
+  const formatWhen = isToday(range.start) && isToday(range.end) && isToday(from) ? formatTime : formatDateTime;
+
+  const refresh = () => { setRefreshedAt(Date.now()); setSelection(null); setSlot(null); };
 
   const stats = useMemo(() => {
     let requests = 0; let failed = 0; let overCeiling = 0;
     for (const point of points) {
       requests += point.multiplicity;
-      if (point.failed) failed += 1;
+      // Weighted like the request total: in a sampled read failures are read in full, the rest at 1 in N.
+      if (point.failed) failed += point.multiplicity;
       if (point.ms > ceiling) overCeiling += 1;
     }
-    return { requests: Math.round(requests), failed, overCeiling };
+    return { requests: Math.round(requests), failed: Math.round(failed), overCeiling };
   }, [ceiling, points]);
 
   /** A request pinned to the ceiling belongs to a selection that reaches the ceiling. */
@@ -132,8 +191,8 @@ export const Starfield = () => {
       </div>
       <div className="dashboard-actions">
         <SegmentSelector variant="compact" />
-        <TagControl options={tagOptions.options} value={tags} onChange={(value) => { setTags(value); setSelection(null); setRefreshedAt(Date.now()); }} />
-        <TimeframeSelector value={timeframe} onChange={(value) => { if (value) { setTimeframe(value); setSelection(null); setRefreshedAt(Date.now()); } }}>
+        <TagControl options={tagOptions.options} value={tags} onChange={(value) => { setTags(value); setSelection(null); setSlot(null); setRefreshedAt(Date.now()); }} />
+        <TimeframeSelector value={timeframe} min={retentionStart === null ? undefined : new Date(retentionStart).toISOString()} onChange={(value) => { if (value) { setTimeframe(value); setSelection(null); setSlot(null); setRefreshedAt(Date.now()); } }}>
           <TimeframeSelector.Presets>{PRESETS.map((preset) => <TimeframeSelector.PresetItem key={preset.from} value={preset} />)}</TimeframeSelector.Presets>
         </TimeframeSelector>
         <Select name="starfield-ceiling" aria-label={text.ceilingAria} value={String(ceiling)} onChange={(value) => { if (value) setCeiling(Number(value)); }}>
@@ -167,7 +226,7 @@ export const Starfield = () => {
       <div className="panel-heading">
         <div>
           <h2>{text.heading} <span className="panel-badge">{text.badge(points.length.toLocaleString())}</span></h2>
-          <p>{text.summary(`${formatTime(from)} – ${formatTime(to)}`, stats.failed.toLocaleString(), stats.overCeiling.toLocaleString(), ceiling / 1000)}</p>
+          <p>{text.summary(`${formatWhen(from)} – ${formatWhen(to)}`, stats.failed.toLocaleString(), stats.overCeiling.toLocaleString(), ceiling / 1000)}</p>
           {liveMs !== null && followsNow && <p className="starfield-live" role="status">{selection ? text.livePaused : text.liveUpdated(formatTime(to), isUpdating)}</p>}
         </div>
       </div>
@@ -175,6 +234,14 @@ export const Starfield = () => {
       <p className="starfield-note">{stats.requests > points.length
         ? text.sampledNote(points.length.toLocaleString(), stats.requests.toLocaleString())
         : text.fullNote}</p>
+      {ratio > 1 && <p className="starfield-note starfield-ratio">{text.readRatio(ratio, slowFloorMs === null ? null : formatMs(slowFloorMs))}</p>}
+      {range.clamped && <div className="starfield-overview-block">
+        <p className="starfield-overview-title"><b>{text.overviewTitle}</b>
+          <span className="starfield-legend"><i className="ov-requests" /> {text.overviewRequests} <i className="ov-p95" /> p95 <i className="ov-avg" /> {text.overviewAvg}</span>
+          <span>{text.overviewHint}</span></p>
+        <StarfieldOverview buckets={overview.buckets} from={range.start} to={range.end} slot={shown} maxSlotMs={MAX_WINDOW_MS} onSlot={pickSlot} ariaLabel={text.overviewAria(formatDateTime(range.start), formatDateTime(range.end))} />
+        {(overview.isLoading || overview.error || (overviewServices.key === overviewKey && overview.buckets.length === 0)) && <p className="starfield-overview-status">{overview.error ?? (overview.isLoading ? text.overviewLoading : text.overviewEmpty)}</p>}
+      </div>}
       <div className="starfield-toolbar">
         <span className="starfield-legend"><i className="star-dot" /> {text.legendOk} <i className="star-spike" /> {text.legendFailed} <i className="star-dot star-dot-large" /> {text.legendSampled} <i className="star-avg" /> {text.legendAvg} <i className="star-percentile" /> {text.legendPercentiles}</span>
         <span>{text.dragHint}</span>
@@ -194,7 +261,7 @@ export const Starfield = () => {
       <div className="panel-heading">
         <div>
           <h2>{text.selectedHeading} <span className="panel-badge">{selected.length.toLocaleString()}</span></h2>
-          <p>{formatTime(selection.from)} – {formatTime(selection.to)} · {formatMs(selection.min)} – {selection.max >= ceiling ? text.andAbove(formatMs(ceiling)) : formatMs(selection.max)} · {text.slowestFirst}</p>
+          <p>{formatWhen(selection.from)} – {formatWhen(selection.to)} · {formatMs(selection.min)} – {selection.max >= ceiling ? text.andAbove(formatMs(ceiling)) : formatMs(selection.max)} · {text.slowestFirst}</p>
           {columnVisibility.multiplicity === true && <p>{text.samplingExplain}</p>}
         </div>
         <div className="panel-controls"><Button size="condensed" variant="emphasized" onClick={() => setSelection(null)}>{text.clear}</Button></div>
@@ -202,8 +269,8 @@ export const Starfield = () => {
       {/* The page is always light, but the table follows the Dynatrace theme: its custom cells
           inherited the page's dark ink and vanished on the dark-theme table. The theme token keeps
           the text in step with whatever background the table draws. */}
-      <div className="starfield-table" style={{ color: Colors.Text.Neutral.Default }}>
-        <DataTable data={selected} columns={columns} sortable columnVisibility={columnVisibility} onColumnVisibilityChange={setColumnVisibility}>
+      <div className="starfield-table" style={{ color: Colors.Text.Neutral.Default, background: Colors.Background.Surface.Default }}>
+        <DataTable data={selected} columns={columns} sortable fullWidth resizable columnSizing={columnSizing} onColumnSizingChange={setColumnSizing} variant={{ verticalDividers: true }} columnVisibility={columnVisibility} onColumnVisibilityChange={setColumnVisibility}>
           <DataTable.Toolbar>
             <DataTable.VisibilitySettings />
           </DataTable.Toolbar>

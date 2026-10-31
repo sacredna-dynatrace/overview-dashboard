@@ -723,6 +723,35 @@ against 0.53 GiB for a full ten-minute read, billed as "Traces - Query". Every t
 eight-hour shift. Hence: 30 s is the shortest interval, updates stop while the tab is hidden, and a
 return reads from the last update so the hidden minutes leave no gap (one read of up to the window).
 
+**A busy window is read at a ratio, its slow tail in full.** `sort end_time desc | limit 25000`
+keeps the newest records, so a window that overflows the cap is drawn with its oldest minutes
+empty (one tenant filled the cap in under four minutes). `fetch spans, samplingRatio: N` reads 1
+trace in N, whole traces, evenly over the window; multiply the weight by `dt.system.sampling_ratio`.
+On bby34718, ten minutes: 1 in 10 gave 1,990 records over the whole window, 331,490 requests
+extrapolated against 312,697 from the full read, 98 MB scanned against 585 MB.
+
+- The ratio comes from a probe at 1 in 100 (`count()` and `percentile(duration, 99)`: 12 MB,
+  0.04 s): the smallest ratio whose expected records fit 90% of the cap.
+- At 1 in 10, nine outliers in ten vanish (58 of 578 requests over 6 s). So a sampled window also
+  reads everything at or above the probe's p99 in full and drops sampled points above it. A
+  `duration` filter does **not** shrink the scan: the tail query scanned 562 MB, the same as a full
+  read. A sampled window therefore costs about what a full read did - the gain is coverage, not cost.
+- The same tail query also takes `request.is_failed == true`: failures thinned to 1 in N looked
+  like a healthy window, and the scan is the whole window anyway, so they cost nothing extra.
+
+**Long timeframes: a metric overview, then fifteen minutes of spans.** The field never reads more
+than fifteen minutes of spans. A longer timeframe gets an overview strip from
+`dt.service.request.count` / `response_time` (seven days on bby34718: 0 bytes scanned, 0.26 s),
+and the reader picks the stretch to draw. Two traps:
+
+- Unfiltered, the service metrics count outgoing calls as services ("Requests to unmonitored
+  hosts" was 14.5M of 17.4M requests in ten minutes; p50 came out at 0.6 ms). The overview is
+  limited to the services in the field. Per service the metric and the sampling-weighted span count
+  agree (UICommonController: 93,461 against 93,381).
+- Span retention is read from `dt.system.buckets` (`retention_days` of the spans table: 10 on
+  bby34718), which scans nothing. Never probe for the oldest span: `min(end_time)` over 40 days is
+  a scan of every stored day, and it stops at the scan limit with a wrong answer (6 days, not 10).
+
 ## Shared segment and tag filters
 
 Segments and tags are chosen once (`SegmentsProvider`, `TagFilterProvider` in `App.tsx`) and hold on

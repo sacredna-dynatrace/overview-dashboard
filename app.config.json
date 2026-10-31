@@ -3,7 +3,7 @@
   "environmentUrl": "https://diw85600.apps.dynatrace.com/",
   "app": {
     "name": "OverviewDashboard",
-    "version": "0.0.123",
+    "version": "0.0.130",
     "description": "Explore request traffic from RUM applications through services to infrastructure",
     "id": "my.overview.dashboard",
     "scopes": [

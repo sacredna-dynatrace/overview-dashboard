@@ -224,7 +224,9 @@
 .starfield-panel { max-width: 1440px; margin: 0 auto 20px; }
 .starfield-note { margin: 0 22px 12px; color: var(--dashboard-muted); font-size: 12px; }
 .starfield-chart { padding: 0 16px 16px; }
-.starfield-table { padding: 0 16px 16px; }
+/* The table follows the Dynatrace theme, the page does not: its own surface colour behind the column
+   settings and pagination keeps them readable on a dark-theme table. */
+.starfield-table { margin: 0 16px 16px; padding: 8px; border-radius: 8px; }
 .star-failed { color: var(--status-problem); }
 .star-trace-link { display: inline-flex; align-items: center; gap: 4px; color: inherit; font-weight: 600; text-decoration: none; }
 .star-trace-link:hover { text-decoration: underline; }
@@ -251,5 +253,17 @@
 .starfield-heading .dashboard-description { max-width: 900px; }
 .starfield-heading .dashboard-actions { flex-wrap: wrap; }
 .starfield-heading .dashboard-actions * { white-space: nowrap; }
+.starfield-overview-block { padding: 0 16px 14px; }
+.starfield-overview-title { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 0 6px 6px; color: var(--dashboard-muted); font-size: 12px; }
+.starfield-overview-title b { color: var(--dashboard-ink); font-size: 13px; }
+.starfield-overview { position: relative; outline: none; }
+.starfield-overview canvas { cursor: crosshair; touch-action: none; }
+.starfield-overview:focus-visible { box-shadow: 0 0 0 2px #7dd3fc; border-radius: 4px; }
+.starfield-overview-status { margin: 4px 6px 0; color: var(--dashboard-muted); font-size: 12px; }
+.ov-requests { display: inline-block; width: 14px; height: 10px; margin-left: 6px; background: rgba(156, 196, 255, 0.6); border-bottom: 2px solid #0d1838; }
+.ov-p95, .ov-avg { display: inline-block; width: 16px; height: 0; margin-left: 6px; outline: 3px solid #0d1838; }
+.ov-p95 { border-top: 2px solid #fcd34d; }
+.ov-avg { border-top: 2px solid #67e8f9; }
+.starfield-ratio { margin-top: -6px; color: #0369a1; }
 .starfield-live { color: #0369a1; font-weight: 600; }
 .starfield-loading { position: absolute; inset: 0; display: grid; place-items: center; margin: 0; color: var(--dashboard-muted); font-size: 13px; }
