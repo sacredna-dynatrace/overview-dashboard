@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { Timeframe } from "@dynatrace/strato-components/core";
 import { useDql } from "@dynatrace-sdk/react-hooks";
 import { resolveTimeframe, type ResolvedTimeframe } from "./useTopologyData";
+import { tagArrayCondition } from "../components/SharedFilters";
 
 type DqlRecord = Record<string, unknown>;
 
@@ -74,7 +75,7 @@ const timeWindow = (timeframe: ResolvedTimeframe) => `from: "${timeframe.from}",
  * Problems tile uses. Ordered so the problems worth looking at come first: open ones, then the ones
  * that reached the most users and entities.
  */
-const problemsQuery = (timeframe: ResolvedTimeframe) => `fetch dt.davis.problems, ${timeWindow(timeframe)}
+const problemsQuery = (timeframe: ResolvedTimeframe, tags: string[]) => `fetch dt.davis.problems, ${timeWindow(timeframe)}
 | filter dt.davis.is_duplicate == false
 | summarize {
     event_id = takeLast(event.id), title = takeLast(event.name), category = takeLast(event.category), status = takeLast(event.status),
@@ -83,9 +84,10 @@ const problemsQuery = (timeframe: ResolvedTimeframe) => `fetch dt.davis.problems
     affected = takeLast(affected_entity_ids), affected_names = takeLast(affected_entity_names),
     users = takeLast(dt.davis.affected_users_count), hosts = takeLast(dt.entity.host),
     k8s_namespaces = takeLast(k8s.namespace.name), k8s_workloads = takeLast(k8s.workload.name),
-    k8s_clusters = takeLast(k8s.cluster.name), process_groups = takeLast(dt.entity.process_group)
+    k8s_clusters = takeLast(k8s.cluster.name), process_groups = takeLast(dt.entity.process_group),
+    entity_tags = takeLast(entity_tags)
   }, by: { display_id }
-| fieldsAdd host_count = arraySize(arrayDistinct(hosts))
+${tags.length > 0 ? `| filter ${tagArrayCondition("entity_tags", tags)}\n` : ""}| fieldsAdd host_count = arraySize(arrayDistinct(hosts))
 | fieldsAdd n_affected = arraySize(affected), active = status == "ACTIVE"
 // Nulls sort first in a descending sort, which put problems without a user estimate on top.
 | fieldsAdd users_rank = coalesce(users, 0)
@@ -151,20 +153,26 @@ const optionalNumber = (record: DqlRecord, field: string): number | null => {
   return Number.isFinite(parsed) ? parsed : null;
 };
 
-export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number) => {
+/**
+ * The shared tag filter matches a problem's `entity_tags` - the tags of every entity Davis attached,
+ * hosts included, in the same strings as service tags (bby34718: "To-Be" on 99 of 132 problems in
+ * seven days). Segments narrow the problem list only: the call graph and entity lookups draw the
+ * rings around whatever problem is picked, and a segment would cut dependencies out of them.
+ */
+export const useBlastRadiusData = (timeframe: Timeframe, refreshedAt: number, tags: string[]) => {
   const resolved = useMemo(() => resolveTimeframe(timeframe, refreshedAt), [timeframe, refreshedAt]);
   const queries = useMemo<Record<BlastQueryKey, string>>(() => ({
-    problems: problemsQuery(resolved),
+    problems: problemsQuery(resolved, tags),
     services: servicesQuery(resolved),
     frontends: frontendsQuery(resolved),
     workloads: workloadsQuery(resolved),
     frontendIds: frontendIdsQuery(resolved),
-  }), [resolved]);
+  }), [resolved, tags]);
   const problems = useDql({ query: queries.problems, ...QUERY_LIMITS });
-  const services = useDql({ query: queries.services, ...QUERY_LIMITS });
-  const frontends = useDql({ query: queries.frontends, ...QUERY_LIMITS });
-  const workloads = useDql({ query: queries.workloads, ...QUERY_LIMITS });
-  const frontendIds = useDql({ query: queries.frontendIds, ...QUERY_LIMITS });
+  const services = useDql({ query: queries.services, ...QUERY_LIMITS, filterSegments: [] });
+  const frontends = useDql({ query: queries.frontends, ...QUERY_LIMITS, filterSegments: [] });
+  const workloads = useDql({ query: queries.workloads, ...QUERY_LIMITS, filterSegments: [] });
+  const frontendIds = useDql({ query: queries.frontendIds, ...QUERY_LIMITS, filterSegments: [] });
 
   const problemList = useMemo<BlastProblem[]>(() => records(problems.data).flatMap((record) => {
     const displayId = text(record, "display_id");
@@ -259,7 +267,8 @@ export const useProblemDescription = (displayId: string | null, timeframe: Resol
 | sort timestamp desc
 | limit 1
 | fields description = event.description, impact = dt.davis.impact_level` : "data record(description = \"\")";
-  const result = useDql({ query, ...QUERY_LIMITS }, { enabled: valid });
+  // A problem already picked from the (segmented) list: its description is not filtered again.
+  const result = useDql({ query, ...QUERY_LIMITS, filterSegments: [] }, { enabled: valid });
   const record = records(result.data)[0];
   return {
     description: valid && record ? text(record, "description") : "",

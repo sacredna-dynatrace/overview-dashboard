@@ -3,7 +3,7 @@
   "environmentUrl": "https://diw85600.apps.dynatrace.com/",
   "app": {
     "name": "OverviewDashboard",
-    "version": "0.0.100",
+    "version": "0.0.123",
     "description": "Explore request traffic from RUM applications through services to infrastructure",
     "id": "my.overview.dashboard",
     "scopes": [
@@ -14,7 +14,8 @@
       { "name": "storage:metrics:read", "comment": "Read RUM, service, and host metrics" },
       { "name": "storage:events:read", "comment": "Read dt.davis.problems for the problem count tile" },
       { "name": "storage:user.events:read", "comment": "Read user.events to correlate RUM traces with backend services" },
-      { "name": "davis:analyzers:execute", "comment": "Run the Davis forecast analyzer for the selected node's headline metric" }
+      { "name": "davis:analyzers:execute", "comment": "Run the Davis forecast analyzer for the selected node's headline metric" },
+      { "name": "storage:filter-segments:read", "comment": "List and apply segments in the topology map's segment selector" }
     ]
   }
 }

@@ -219,6 +219,9 @@ and the `smartscapeNodes`/`smartscapeEdges` traps. Each entry there cost a debug
 No query reads raw spans or `user.events`. Both were removed: they do not scale (see
 `JOIN_RIGHT_TABLE_SIZE` in the notes) and Smartscape covers the same relationships more completely.
 Reintroducing a raw-record scan should be a deliberate decision, not a convenience.
+The one deliberate exception is the Starfield page (`/starfield`), a response-time scatter that
+needs each request's own duration: it reads root spans for a 5-15 minute window, capped at 25,000
+records. See "Starfield" in the notes.
 
 ### The map is not the tiles
 

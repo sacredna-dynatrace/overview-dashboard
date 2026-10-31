@@ -535,8 +535,10 @@ const serviceWorkloadQuery = (timeframe: ResolvedTimeframe) => `timeseries reque
  * the external-callers node as candidates, marked as such, because otherwise an OTLP-only tenant
  * would never get a front end at all.
  */
+// Also carries the service's tags for the map's tag filter: tags live only on the classic entities
+// (`smartscapeNodes SERVICE` has no tag field), so OTLP-only services have none (diw85600).
 const entryServicesQuery = (timeframe: ResolvedTimeframe) => `fetch dt.entity.service, ${timeWindow(timeframe)}
-| fields service_id = id, callers = coalesce(arraySize(called_by[dt.entity.service]), 0)
+| fields service_id = id, callers = coalesce(arraySize(called_by[dt.entity.service]), 0), tags, service_type = serviceType
 | limit 25000`;
 
 const numeric = (record: DqlRecord, field: string): number => {
@@ -848,7 +850,10 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
   const rumErrors = useDql({ query: queries.rumErrors, ...QUERY_LIMITS });
   const affectedEntities = useDql({ query: queries.affectedEntities, ...QUERY_LIMITS });
   const serviceWorkload = useDql({ query: queries.serviceWorkload, ...QUERY_LIMITS });
-  const entryServices = useDql({ query: queries.entryServices, ...QUERY_LIMITS });
+  // Outside any selected segment (an explicit empty list overrides SegmentQueryScope): this query
+  // feeds the tag list and the External callers test, and a Kubernetes segment filtered the
+  // service entities away, which emptied the tag list and hid the tag filter (isb54165).
+  const entryServices = useDql({ query: queries.entryServices, ...QUERY_LIMITS, filterSegments: [] });
   /**
    * Cluster and container totals for the Kubernetes tile. Deduplicated by pod first: the pods
    * query returns one row per service-pod pair, so a pod serving two services would otherwise have
@@ -1021,6 +1026,20 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
     return addExternalCallers(inferSinglePlacement(addMeasuredTraffic(placed, [...flows, ...placedProcessFlows]), failureRates), callers, failureRates);
   }, [data, entryServices.data, entryServices.error, problemsByEntity, resolved.seconds, serviceHealth.data, serviceProcess.data, serviceProcessTraffic.data, serviceWorkload.data]);
 
+  /** Map node id to its classic tags ("key:value" or "key"). Services without tags are absent. */
+  const serviceTags = useMemo(() => new Map<string, string[]>(records(entryServices.data).flatMap((record) => {
+    const id = text(record, "service_id");
+    const tags = Array.isArray(record.tags) ? record.tags.map(String).filter(Boolean) : [];
+    return id && tags.length > 0 ? [[`service-${id}`, tags] as const] : [];
+  })), [entryServices.data]);
+
+  /** Map node id to classic serviceType (WEB_SERVICE, DATABASE_SERVICE, …). */
+  const serviceTypes = useMemo(() => new Map<string, string>(records(entryServices.data).flatMap((record) => {
+    const id = text(record, "service_id");
+    const type = text(record, "service_type");
+    return id && type ? [[`service-${id}`, type] as const] : [];
+  })), [entryServices.data]);
+
   const recordCounts = useMemo<Record<TopologyQueryKey, number>>(() => ({
     rum: records(rum.data).length,
     service: records(service.data).length,
@@ -1126,6 +1145,8 @@ export const useTopologyData = (timeframe: Timeframe, refreshedAt: number, sortB
       active: numeric(records(problems.data)[0] ?? {}, "active"),
     },
     recordCounts,
+    serviceTags,
+    serviceTypes,
     /**
      * Queries that returned exactly as many records as they are allowed to.
      *

@@ -35,7 +35,7 @@ export type TopologyNode = {
  * for services, container count for pods, % CPU for hosts - so it only ranks within a column, never
  * across them.
  */
-export type TopologySort = "value" | "problems" | "connections" | "name";
+export type TopologySort = "value" | "entry" | "problems" | "connections" | "name";
 
 export type TopologyEdge = {
   id: string;
@@ -66,6 +66,13 @@ type TopologyGraphProps = {
   nodes: TopologyNode[];
   edges: TopologyEdge[];
   sortBy: TopologySort;
+  /** How many nodes each column draws; one of DRAWN_PER_COLUMN_OPTIONS. */
+  perColumn?: number;
+  /**
+   * Services allowed to anchor the map (the tag filter), or null for all. Only the anchors are
+   * filtered: pods and hosts are whatever those services reach, as with any anchor.
+   */
+  serviceFilter?: ReadonlySet<string> | null;
   /**
    * The selected node, owned by the page so that the map search can select a node the map has not
    * drawn - which re-anchors the map on it, exactly like a click.
@@ -120,9 +127,11 @@ const FIRST_ROW_Y = 88;
  * The summary tiles count every entity the queries return, but the map draws only the top few per
  * column and says how many it left out. On a tenant with hundreds of services anything larger is a
  * wall of crossing edges rather than a topology, so the cap is what makes the picture readable -
- * the sort control is how you decide which few matter.
+ * the sort control is how you decide which few matter. The user picks the cap; 30 stops short of the
+ * point where a column is taller than a screen many times over and the lines stop being traceable.
  */
-const MAX_DRAWN_PER_COLUMN = 10;
+export const DRAWN_PER_COLUMN_OPTIONS = [5, 10, 20, 30] as const;
+export const DEFAULT_DRAWN_PER_COLUMN = 10;
 
 /** Column order, used to keep a traversal from doubling back on itself. */
 const TIER: Record<TopologyNode["kind"], number> = { rum: 0, service: 1, paas: 2, infrastructure: 3 };
@@ -166,7 +175,7 @@ export const formatEdgeValue = (edge: TopologyEdge) => isMeasured(edge)
   ? `${formatValue(edge.value, edge.unit)}${edge.label ? ` · ${edge.label}` : ""}${edge.inferred ? " · inferred: single placement" : ""}`
   : edge.label ?? formatValue(edge.value, edge.unit);
 
-export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionChange }: TopologyGraphProps) => {
+export const TopologyGraph = ({ nodes, edges, sortBy, perColumn = DEFAULT_DRAWN_PER_COLUMN, serviceFilter = null, selectedId, onSelectionChange }: TopologyGraphProps) => {
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const degrees = useMemo(() => {
     const counts = new Map<string, number>();
@@ -205,17 +214,24 @@ export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionCha
     for (const edge of edges) { link(edge.source, edge.target); link(edge.target, edge.source); }
     return map;
   }, [edges]);
+  /**
+   * First-tier services: called straight from a RUM application or from the External callers stand-in,
+   * i.e. where traffic enters the backend. RUM node ids, the stand-in's included, start with "rum-".
+   */
+  const entryServices = useMemo(() => new Set(edges.filter((edge) => edge.source.startsWith("rum-")).map((edge) => edge.target)), [edges]);
   // Every ordering falls back to value, so ties stay deterministic instead of shuffling between
   // renders - a column that reorders on refresh is harder to read than one that is merely capped.
   const compare = useMemo(() => {
     const byValue = (a: TopologyNode, b: TopologyNode) => unitRank(a) - unitRank(b) || b.value - a.value || a.name.localeCompare(b.name);
     return (a: TopologyNode, b: TopologyNode) => {
       if (sortBy === "name") return a.name.localeCompare(b.name);
+      // Entry services first, busiest first among them; the rest fill any slots left over.
+      if (sortBy === "entry") return Number(entryServices.has(b.id)) - Number(entryServices.has(a.id)) || byValue(a, b);
       if (sortBy === "problems") return (b.problems ?? 0) - (a.problems ?? 0) || byValue(a, b);
       if (sortBy === "connections") return (degrees.get(b.id) ?? 0) - (degrees.get(a.id) ?? 0) || byValue(a, b);
       return byValue(a, b);
     };
-  }, [degrees, sortBy]);
+  }, [degrees, entryServices, sortBy]);
   const hops = useMemo(() => {
     const kindOf = new Map(nodes.map((node) => [node.id, node.kind]));
     const anchors = selectedId && kindOf.has(selectedId)
@@ -223,9 +239,9 @@ export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionCha
       // An unconnected service anchors nothing, so connected ones take the slots first - otherwise
       // the default map can pick ten busy services that happen to have no topology and draw no
       // lines at all.
-      : nodes.filter((node) => node.kind === "service")
+      : nodes.filter((node) => node.kind === "service" && (!serviceFilter || serviceFilter.has(node.id)))
         .sort((a, b) => Number((degrees.get(b.id) ?? 0) > 0) - Number((degrees.get(a.id) ?? 0) > 0) || compare(a, b))
-        .slice(0, MAX_DRAWN_PER_COLUMN)
+        .slice(0, perColumn)
         .map((node) => node.id);
     const best = new Map<string, number>();
     let frontier = anchors.map((id) => ({ id, direction: 0 }));
@@ -248,7 +264,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionCha
       frontier = next;
     }
     return best;
-  }, [compare, degrees, neighbours, nodes, selectedId]);
+  }, [compare, degrees, neighbours, nodes, perColumn, selectedId, serviceFilter]);
   /** The anchor's own column keeps the chosen sort; every other column follows it. */
   const anchorKind = useMemo(() => (selectedId ? nodesById.get(selectedId)?.kind : undefined) ?? "service", [nodesById, selectedId]);
   const columns = useMemo(() => {
@@ -278,7 +294,7 @@ export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionCha
       const drawn = related
         .map((node) => ({ node, rank: parentRank(node), hop: hops.get(node.id) ?? 0 }))
         .sort((a, b) => Number(Boolean(a.node.virtual)) - Number(Boolean(b.node.virtual)) || a.rank - b.rank || a.hop - b.hop || compare(a.node, b.node))
-        .slice(0, MAX_DRAWN_PER_COLUMN)
+        .slice(0, perColumn)
         .map((entry) => entry.node);
       drawn.forEach((node, index) => placed.set(node.id, index));
       /**
@@ -287,12 +303,12 @@ export const TopologyGraph = ({ nodes, edges, sortBy, selectedId, onSelectionCha
        * hundreds of services were left out. `beyond` is the rest of the column's inventory, shown
        * only in that one case - under a selection it would describe the tenant, not the focus.
        */
-      const beyond = !selectedId && kind === "service" ? nodes.filter((node) => node.kind === "service" && !node.virtual).length - drawn.length : 0;
+      const beyond = !selectedId && kind === "service" ? nodes.filter((node) => node.kind === "service" && !node.virtual && (!serviceFilter || serviceFilter.has(node.id))).length - drawn.length : 0;
       built.set(kind, { kind, drawn, hidden: related.length - drawn.length, beyond });
     }
     // Back into canvas order: the layout indexes columns by their position on screen.
     return (Object.keys(columnX) as TopologyNode["kind"][]).map((kind) => built.get(kind) ?? { kind, drawn: [], hidden: 0, beyond: 0 });
-  }, [anchorKind, compare, hops, neighbours, nodes, selectedId]);
+  }, [anchorKind, compare, hops, neighbours, nodes, perColumn, selectedId, serviceFilter]);
   /**
    * Rows are assigned per column, then nudged so that an edge which skips a column has a clear
    * corridor through it.

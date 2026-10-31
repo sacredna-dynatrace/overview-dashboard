@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Timeframe } from "@dynatrace/strato-components/core";
-import { TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS } from "@dynatrace/strato-components/filters";
+import { SegmentSelector, TimeframeSelector, TIMEFRAME_SELECTOR_PRESETS, useSegments } from "@dynatrace/strato-components/filters";
 import { Markdown } from "@dynatrace/strato-components/content";
 import { Button } from "@dynatrace/strato-components/buttons";
 import { sendIntent } from "@dynatrace-sdk/navigation";
@@ -8,6 +8,8 @@ import { SearchInput, Select, ToggleButtonGroup } from "@dynatrace/strato-compon
 import { AiIcon, ExternalLinkIcon } from "@dynatrace/strato-icons";
 import { BlastRadiusGraph, buildBlastLayout, type BlastLayout, type BlastLinkOf } from "../components/BlastRadiusGraph";
 import { RefreshControl } from "../components/RefreshControl";
+import { useServiceTagOptions, useTagFilter } from "../components/SharedFilters";
+import { TagControl } from "../components/TagControl";
 import { StatusIcon } from "../components/StatusMark";
 import { buildEntityLink, buildProblemFrontendLink, buildProblemLink, buildProcessLink, buildWorkloadLink } from "../components/TileLinks";
 import { useBlastRadiusData, useProblemDescription, type BlastProblem, type BlastQueryKey } from "../hooks/useBlastRadiusData";
@@ -176,7 +178,10 @@ export const BlastRadius = () => {
   const [category, setCategory] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autoRefreshMs, setAutoRefreshMs] = useState<number | null>(null);
-  const { problems, services, frontendCalls, workloadIds, frontendIdOf, isLoading, errors, truncated, resolved, refetch } = useBlastRadiusData(timeframe, refreshedAt);
+  const { tags, setTags } = useTagFilter();
+  const { segments } = useSegments();
+  const tagOptions = useServiceTagOptions();
+  const { problems, services, frontendCalls, workloadIds, frontendIdOf, isLoading, errors, truncated, resolved, refetch } = useBlastRadiusData(timeframe, refreshedAt, tags);
 
   /**
    * A relative timeframe resolves to new timestamps on a refresh, which reruns the queries by itself;
@@ -263,6 +268,8 @@ export const BlastRadius = () => {
         <p className="dashboard-description">Pick a problem to see what depends on its root cause: Davis-confirmed impact in red, the rest of the dependency fan muted. Click a node to open it in Dynatrace.</p>
       </div>
       <div className="dashboard-actions">
+        <SegmentSelector variant="compact" />
+        <TagControl options={tagOptions.options} value={tags} onChange={(value) => { setTags(value); setSelectedId(null); }} />
         <TimeframeSelector value={timeframe} onChange={(value) => { if (value) { setTimeframe(value); setRefreshedAt(Date.now()); setSelectedId(null); } }}>
           <TimeframeSelector.Presets>{TIMEFRAME_SELECTOR_PRESETS.map((preset) => <TimeframeSelector.PresetItem key={`${preset.from}-${preset.to}`} value={preset} />)}<TimeframeSelector.PresetItem value={yesterdayPreset}>Yesterday</TimeframeSelector.PresetItem></TimeframeSelector.Presets>
         </TimeframeSelector>
@@ -305,7 +312,9 @@ export const BlastRadius = () => {
           </li>)}
           {!isLoading && visible.length === 0 && <li className="blast-empty">{searchedId
             ? `${searchedId} is not in the selected timeframe. Widen the timeframe to find it.`
-            : problems.length === 0 ? "No problems in this timeframe." : "No problems match these filters."}</li>}
+            : problems.length === 0 ? (segments.length > 0 ? "No problems for the selected segment. Its conditions may not apply to Davis problems."
+              : tags.length > 0 ? "No problems on entities with these tags in this timeframe." : "No problems in this timeframe.")
+            : "No problems match these filters."}</li>}
         </ol>
       </aside>
       <div className="graph-panel blast-graph">

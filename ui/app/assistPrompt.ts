@@ -169,11 +169,16 @@ export const explainPrompt = (problem: BlastProblem, language: string | null, sc
   const sources = rum
     ? [`Steps: 1) fetch user.events where dt.rum.application.entity in (${list(apps)}), 2) dt.frontend.* metrics, 3) the backend services it calls.`]
     : [
-      "Steps: 1) error logs first, 2) then metrics, traces and events.",
-      where
-        ? `Logs: filter by ${where} - logs here have no dt.entity.service.`
-        : "Logs: find these entities' hosts or Kubernetes namespaces first and filter by those - logs here have no dt.entity.service.",
-      "Errors = loglevel ERROR/SEVERE/CRITICAL/ALERT/EMERGENCY, or content with exception/error/failed/timeout at any level.",
+      // With no scope, "find the hosts or namespaces first" sent Assist hunting for a scope that did
+      // not exist: P-2610895 on bby34718 was an AWS Lambda function (no host, process or tag, no
+      // spans of its own, no logs), and the run hit Assist's tool-call limit before answering.
+      ...(where
+        ? [
+          "Steps: 1) error logs first, 2) then metrics, traces and events.",
+          `Logs: filter by ${where} - logs here have no dt.entity.service.`,
+          "Errors = loglevel ERROR/SEVERE/CRITICAL/ALERT/EMERGENCY, or content with exception/error/failed/timeout at any level.",
+        ]
+        : ["Steps: 1) service metrics, 2) callers' client spans, 3) events. No host, process or Kubernetes scope is known - it may be serverless (e.g. AWS Lambda); skip logs unless one check finds them."]),
     ];
   return [
     `Analyze Davis problem ${problem.displayId} "${problem.title}"${hasWindow ? `, ${isoMinute(start)} to ${until}` : ""}.`,
@@ -187,7 +192,10 @@ export const explainPrompt = (problem: BlastProblem, language: string | null, sc
     // counts records, and reported the absent event.start on all 14,922. A one-record sample fails too,
     // because span.status_code is set only on failed spans. No angle brackets: the Assist panel strips
     // them as markup, and "isNotNull(<field>)" arrived as "isNotNull()".
-    "Verify names first - they differ per tenant, and a wrong field or metric returns 0 rows without an error:",
+    // A budget, as in the SRE Agent prompt: Assist stops at its tool-call limit with no answer at all.
+    "Use about 10 queries, in the step order; when calls run low, answer with what you have. Use entity ids as given - do not look up names unless the answer needs them.",
+    // Checked only on a 0-row result: verifying every name up front cost calls the analysis needed.
+    "A wrong field or metric name returns 0 rows without an error. Only when a query returns 0 rows, check the name before treating it as evidence:",
     "- Fields: fetch the source in the window | limit 1 | fieldsKeep \"*keyword*\".",
     "- Values: countIf(isNotNull(fieldname)) over the window - not fieldsSummary (counts records, so absent fields look full), not a 1-record sample.",
     `- Metrics and dimensions: fetch metric.series | filter startsWith(metric.key, "${rum ? "dt.frontend." : "dt.service."}").`,
@@ -198,10 +206,15 @@ export const explainPrompt = (problem: BlastProblem, language: string | null, sc
       rum ? "user.events time = start_time" : "",
       "failed span = span.status_code == \"error\" or request.is_failed == true",
       "failure rate = dt.service.request.failure_count / dt.service.request.count",
-      "external services (WEB_REQUEST_SERVICE, no process) appear only as client spans on the caller, by server.address",
+      // Lambda: faas.invoked_name and server.address lambda.<region>.amazonaws.com on the callers' client spans (bby34718).
+      "services with no process - external WEB_REQUEST_SERVICE or AWS Lambda - have no spans of their own: their calls are client spans on the callers, by server.address or faas.invoked_name (the Lambda function name)",
       "names missing from Smartscape are in dt.entity.*",
     ].filter(Boolean).join("; ")}.`,
-    "Answer: checks run (filter, range, record count incl. 0); timeline from the earliest anomaly; root cause with evidence and DQL; impact; remediation; prevention. Say so if the data does not support a conclusion.",
+    // From the SRE Agent's Dynatrace Intelligence prompt. Recurrence decides most custom threshold
+    // alerts here: "(ALL) Host CPU 사용량 높음(>90 %)" fires many times a day on isb54165.
+    "If calls remain, also check: how often this alert name fired on the same entity in the last 48h (fetch dt.davis.problems, same event.name, expand affected_entity_ids; list the problem ids); for a threshold alert, the triggering metric's own time series, not its description.",
+    "Judge whether it needs attention: synthetic, test-origin, or steadily recurring alerts with no correlating logs are noise - say so.",
+    "Answer: start with a one-sentence Verdict (kind of problem, what is happening, which entity, since when); then checks run (filter, range, record count incl. 0); timeline from the earliest anomaly; root cause with evidence and DQL; impact; remediation; prevention; evidence links as relative paths (/ui/entity/ENTITY-ID, /ui/apps/dynatrace.davis.problems/problem/P-ID). Say so if the data does not support a conclusion.",
     zone ? `Times in ${zone}${offset ? ` (${offset})` : ""}.` : "",
     language ? `Answer in ${language}.` : "",
   ].filter(Boolean).join("\n");

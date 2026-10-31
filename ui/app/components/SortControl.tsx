@@ -13,6 +13,8 @@ import type { TopologySort } from "./TopologyGraph";
  */
 const SORTS: { value: TopologySort; label: string }[] = [
   { value: "value", label: "Busiest" },
+  // Services called straight from a RUM application or External callers; other columns follow them.
+  { value: "entry", label: "Entry services (1st tier)" },
   { value: "problems", label: "Problems first" },
   { value: "connections", label: "Most relationships" },
   { value: "name", label: "Name (A–Z)" },

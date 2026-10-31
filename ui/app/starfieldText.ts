@@ -1,0 +1,131 @@
+import { getLanguage } from "@dynatrace-sdk/user-preferences";
+
+/**
+ * The Starfield's on-screen text, in English and Korean. The language follows the user's Dynatrace
+ * setting: Korean for "ko", English otherwise, so a global team member on the same tenant still
+ * reads English. Only this page is translated so far; the shared controls (tags, segments) are not.
+ */
+const en = {
+  eyebrow: "DISTRIBUTED TRACES / RESPONSE TIME",
+  description: "Every traced request in the window as a star: when it finished against how long it took. Brighter, larger stars stand for more requests. Drag over a region to list the requests in it and open their traces.",
+  clamped: "The selected timeframe is longer than 15 minutes, so only its last 15 minutes are shown.",
+  liveNeedsNow: "Live updates need a timeframe that ends now; they are off for this timeframe.",
+  ceilingAria: "Y-axis ceiling",
+  ceilingOption: (seconds: number) => `Y max ${seconds} s`,
+  scaleAria: "Y-axis scale",
+  logScale: "Log scale",
+  linearScale: "Linear scale",
+  liveAria: "Live updates",
+  liveOff: "Live off",
+  liveEvery: { "30s": "Live 30 s", "1m": "Live 1 min", "5m": "Live 5 min" } as Record<string, string>,
+  refresh: "Refresh",
+  errorLabel: "Traces:",
+  truncated: (cap: string) => `The window holds more than ${cap} traced requests, so only the newest are drawn. Shorten the window to see all of it.`,
+  heading: "Response time",
+  badge: (count: string) => `${count} points`,
+  summary: (range: string, failed: string, above: string, seconds: number) => `${range} · ${failed} failed · ${above} above ${seconds} s, in the band over the field`,
+  livePaused: "Live paused while a selection is open - clear it to resume",
+  liveUpdated: (time: string, updating: boolean) => `Live · updated ${time}${updating ? " · updating…" : ""} · the shaded edge is still filling in`,
+  sampledNote: (records: string, requests: string) => `Traces are sampled: these ${records} records stand for about ${requests} requests. Busy services are sampled hardest, so read the shape here and take request counts and percentiles from the service metrics.`,
+  fullNote: "Every request in this window was traced, so each point is one request.",
+  legendOk: "OK",
+  legendFailed: "Failed",
+  legendSampled: "Sampled: stands for many requests",
+  legendPercentiles: "p50 / p95 / p99, estimated",
+  legendAvg: "Average, estimated",
+  avgLabel: "avg",
+  dragHint: "Drag over points to list them · click or Esc to clear",
+  slowestTooltip: "Lists the slowest 1% of the requests in the window, without dragging. When they are all above the Y max, every request in the overflow band is listed.",
+  slowestButton: "List slowest 1%",
+  loading: "Loading traces…",
+  emptySegment: "No traced requests for the selected segment. Its conditions may not apply to spans - root spans may carry a host but no Kubernetes cluster or namespace.",
+  emptyTags: "No traced requests from services with these tags in this window.",
+  empty: "No traced requests in this window.",
+  selectedHeading: "Selected requests",
+  andAbove: (value: string) => `${value} and above`,
+  slowestFirst: "slowest first",
+  samplingExplain: "Sampling \"1 of N\": this trace was kept for 1 of N similar requests; the others were not recorded, so only this one opens.",
+  clear: "Clear",
+  columnFinished: "Finished",
+  columnResponseTime: "Response time",
+  columnResult: "Result",
+  resultFailed: "Failed",
+  resultOk: "OK",
+  columnService: "Service",
+  columnEndpoint: "Endpoint",
+  columnSampling: "Sampling",
+  samplingValue: (count: string) => `1 of ${count}`,
+  columnTrace: "Trace",
+  open: "Open",
+  describe: (count: number, failed: number, above: number, ceiling: string, guides: string) =>
+    `Response time of ${count} traced requests: ${failed} failed, ${above} above ${ceiling} in the overflow band${guides ? `; estimated ${guides}` : ""}. Drag to select a region.`,
+};
+
+export type StarfieldText = typeof en;
+
+const ko: StarfieldText = {
+  eyebrow: "분산 트레이스 / 응답시간",
+  description: "시간 창 안에서 추적된 요청을 하나씩 별로 그립니다. 가로축은 요청이 끝난 시각, 세로축은 걸린 시간입니다. 크고 밝은 별일수록 더 많은 요청을 대표합니다. 영역을 드래그하면 그 안의 요청 목록이 나오고, 각 트레이스를 열 수 있습니다.",
+  clamped: "선택한 시간 범위가 15분을 넘어, 마지막 15분만 표시합니다.",
+  liveNeedsNow: "Live는 끝 시각이 '지금'인 시간 범위에서만 동작합니다. 이 범위에서는 꺼져 있습니다.",
+  ceilingAria: "Y축 최대값",
+  ceilingOption: (seconds) => `Y 최대 ${seconds}초`,
+  scaleAria: "Y축 눈금",
+  logScale: "로그 축",
+  linearScale: "선형 축",
+  liveAria: "실시간 갱신",
+  liveOff: "Live 끔",
+  liveEvery: { "30s": "Live 30초", "1m": "Live 1분", "5m": "Live 5분" },
+  refresh: "새로 고침",
+  errorLabel: "트레이스 조회 오류:",
+  truncated: (cap) => `이 시간 창에는 추적된 요청이 ${cap}건을 넘어 최신 요청만 그렸습니다. 전체를 보려면 시간 창을 줄이세요.`,
+  heading: "응답시간",
+  badge: (count) => `${count}개`,
+  summary: (range, failed, above, seconds) => `${range} · 실패 ${failed}건 · ${seconds}초 초과 ${above}건 (차트 위쪽 띠에 표시)`,
+  livePaused: "선택 영역이 열려 있어 Live가 일시정지되었습니다. 선택을 해제하면 다시 시작합니다.",
+  liveUpdated: (time, updating) => `Live · ${time} 갱신${updating ? " · 갱신 중…" : ""} · 오른쪽 음영 구간은 아직 데이터가 들어오는 중입니다`,
+  sampledNote: (records, requests) => `트레이스는 일부만 저장됩니다. 이 기록 ${records}건이 실제 요청 약 ${requests}건을 대표합니다. 요청이 많은 서비스일수록 적게 저장되므로, 여기서는 분포의 모양을 보고 정확한 요청 수와 백분위는 서비스 메트릭에서 확인하세요.`,
+  fullNote: "이 시간 창의 요청이 모두 추적되어, 별 하나가 요청 하나입니다.",
+  legendOk: "정상",
+  legendFailed: "실패",
+  legendSampled: "큰 별: 여러 요청을 대표",
+  legendPercentiles: "p50 / p95 / p99 (추정)",
+  legendAvg: "평균 (추정)",
+  avgLabel: "평균",
+  dragHint: "드래그하면 요청 목록 표시 · 클릭 또는 Esc로 해제",
+  slowestTooltip: "드래그하지 않고, 시간 창에서 가장 느린 1%의 요청을 나열합니다. 모두 Y 최대를 넘으면 위쪽 띠의 요청을 모두 나열합니다.",
+  slowestButton: "가장 느린 1% 보기",
+  loading: "트레이스를 불러오는 중…",
+  emptySegment: "선택한 세그먼트에 해당하는 요청이 없습니다. 세그먼트 조건이 트레이스에는 적용되지 않을 수 있습니다. 서비스 요청 기록에는 호스트 정보는 있어도 Kubernetes 클러스터나 네임스페이스 정보가 없을 수 있습니다.",
+  emptyTags: "이 시간 창에 선택한 태그의 서비스 요청이 없습니다.",
+  empty: "이 시간 창에 추적된 요청이 없습니다.",
+  selectedHeading: "선택한 요청",
+  andAbove: (value) => `${value} 이상`,
+  slowestFirst: "느린 순",
+  samplingExplain: "샘플링 \"N건 중 1건\": 비슷한 요청 N건 중 이 트레이스 1건만 저장되었습니다. 나머지는 기록되지 않아 이 트레이스만 열 수 있습니다.",
+  clear: "선택 해제",
+  columnFinished: "종료 시각",
+  columnResponseTime: "응답시간",
+  columnResult: "결과",
+  resultFailed: "실패",
+  resultOk: "정상",
+  columnService: "서비스",
+  columnEndpoint: "엔드포인트",
+  columnSampling: "샘플링",
+  samplingValue: (count) => `${count}건 중 1건`,
+  columnTrace: "트레이스",
+  open: "열기",
+  describe: (count, failed, above, ceiling, guides) =>
+    `추적된 요청 ${count}건의 응답시간: 실패 ${failed}건, ${ceiling} 초과 ${above}건${guides ? `, 추정 ${guides}` : ""}. 드래그하여 영역을 선택하세요.`,
+};
+
+/** Outside the Dynatrace shell (tests, a bare dev page) the preference call can throw: English then. */
+const userLanguage = () => {
+  try {
+    return getLanguage();
+  } catch {
+    return "en";
+  }
+};
+
+export const starfieldText = (): StarfieldText => (userLanguage().toLowerCase().startsWith("ko") ? ko : en);

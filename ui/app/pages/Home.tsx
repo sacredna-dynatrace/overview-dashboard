@@ -8,6 +8,10 @@ import { RefreshControl } from "../components/RefreshControl";
 import { TopologyGraph, formatEdgeValue, formatNodeValue, formatThroughput, type TopologyNode, type TopologySort } from "../components/TopologyGraph";
 import { buildTileLinks, buildEntityLink } from "../components/TileLinks";
 import { SortControl } from "../components/SortControl";
+import { PerColumnControl, readPerColumn } from "../components/PerColumnControl";
+import { TagControl } from "../components/TagControl";
+import { useTagFilter } from "../components/SharedFilters";
+import { SegmentSelector, useSegments } from "@dynatrace/strato-components/filters";
 import { MapSearch } from "../components/MapSearch";
 import { StatusIcon } from "../components/StatusMark";
 import { paletteVars } from "../theme/colors";
@@ -89,6 +93,10 @@ export const Home = () => {
   const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null);
   const [selectedQuery, setSelectedQuery] = useState<TopologyQueryKey | null>(null);
   const [sortBy, setSortBy] = useState<TopologySort>("value");
+  const [perColumn, setPerColumn] = useState(readPerColumn);
+  // Not remembered: tags belong to one tenant, and a stale filter would silently empty the map.
+  const { tags, setTags } = useTagFilter();
+  const { segments } = useSegments();
   // Collapsed by default: on a large tenant the edge queries hit their cap on every load, so the
   // per-query breakdown would push the tiles below the fold every time somebody opens the page.
   // The headline stays, because a caveat nobody can see is the same as no caveat at all.
@@ -104,7 +112,28 @@ export const Home = () => {
     const timer = setTimeout(() => setCopyState("idle"), 2000);
     return () => clearTimeout(timer);
   }, [copyState]);
-  const { nodes, edges, map, isLoading, errors, refetch, queries, recordCounts, problems, kubernetes, serviceHealth, hostHealth, rumHealth, podHealth, problemsByEntity, truncated, orderInQuery } = useTopologyData(timeframe, refreshedAt, sortBy);
+  const { nodes, edges, map, isLoading, errors, refetch, queries, recordCounts, problems, kubernetes, serviceHealth, hostHealth, rumHealth, podHealth, problemsByEntity, truncated, orderInQuery, serviceTags, serviceTypes } = useTopologyData(timeframe, refreshedAt, sortBy);
+  /** Every tag on a service, most used first. */
+  const tagOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const list of serviceTags.values()) for (const tag of new Set(list)) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+    return [...counts].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag));
+  }, [serviceTags]);
+  /** Services carrying any selected tag; null when no tag is selected. */
+  const serviceFilter = useMemo(() => tags.length === 0 ? null
+    : new Set([...serviceTags].filter(([, list]) => list.some((tag) => tags.includes(tag))).map(([id]) => id)), [serviceTags, tags]);
+  /**
+   * Services on the map that pass the tag filter. Shown above the map because a filter can change
+   * nothing visible: on isb54165 the ten busiest entry services all carry k8s.namespace.name:default,
+   * so selecting it looked like the filter did not work.
+   */
+  const filteredServiceCount = useMemo(() => serviceFilter ? map.nodes.filter((node) => node.kind === "service" && serviceFilter.has(node.id)).length : 0, [map.nodes, serviceFilter]);
+  /**
+   * Databases among them. The map draws databases in the services column; the Services app lists
+   * them under "Database queries" instead, so its count for the same tag was lower by exactly these
+   * (151 against 143, 8 databases, isb54165). Splitting the number lets the two be compared.
+   */
+  const filteredDatabaseCount = useMemo(() => serviceFilter ? map.nodes.filter((node) => node.kind === "service" && serviceFilter.has(node.id) && serviceTypes.get(node.id) === "DATABASE_SERVICE").length : 0, [map.nodes, serviceFilter, serviceTypes]);
   const { forecast, isLoading: forecastLoading } = useNodeForecast(selectedNode);
   // Node values are comparable within a column, edge values are not, so the idle panel highlights
   // the busiest service rather than claiming a "highest traffic path" the edges cannot support.
@@ -196,7 +225,7 @@ export const Home = () => {
       </div>)}
     </section>
     {selectedQuery && <section className="query-inspector" aria-label="Executed DQL"><div className="query-inspector-heading"><div><strong>{QUERY_LABELS[selectedQuery]} DQL</strong><span>{recordCounts[selectedQuery]} records returned</span></div><div className="query-inspector-actions"><button type="button" onClick={() => { navigator.clipboard.writeText(queries[selectedQuery]).then(() => setCopyState("copied"), () => setCopyState("failed")); }} aria-label={`Copy ${QUERY_LABELS[selectedQuery]} DQL to clipboard`}>{copyState === "copied" ? <CheckmarkIcon /> : <CopyIcon />}{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy"}</button><button type="button" onClick={() => setSelectedQuery(null)}>Close</button></div></div><pre>{queries[selectedQuery]}</pre></section>}
-    <section className="content-grid"><div className="graph-panel"><div className="panel-heading"><div><h2>Traffic map <span className="panel-badge">Smartscape</span></h2><p>Services and what connects to them · nodes and rates from metrics, relationships from the Smartscape topology</p><div className="panel-links"><button type="button" onClick={() => setSelectedQuery("rumService")}>RUM → service DQL</button><button type="button" onClick={() => setSelectedQuery("pods")}>Pods DQL</button><button type="button" onClick={() => setSelectedQuery("serviceWorkload")}>Service → workload traffic DQL</button><button type="button" onClick={() => setSelectedQuery("entryServices")}>Entry services DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcess")}>Service → process → host DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcessTraffic")}>Service → process traffic DQL</button></div></div><div className="panel-controls"><MapSearch nodes={map.nodes} onPick={setSelectedNode} /><SortControl value={sortBy} onChange={setSortBy} /><span className="live-indicator"><i /> Live</span></div></div>{nodes.length > 0 && <TopologyGraph nodes={map.nodes} edges={map.edges} sortBy={sortBy} selectedId={selectedNode?.id ?? null} onSelectionChange={setSelectedNode} />}</div><aside className="details-panel"><div className="panel-heading"><div><h2>{selectedNode ? selectedNode.name : "Busiest service"}</h2><p>{selectedNode ? selectedNode.subtitle : busiestService?.unit === "req/min" ? "Highest request rate in the Services column" : "Highest traffic in the Services column"}</p></div></div>{selectedNode ? <div className="selected-detail"><div className="detail-type">{selectedNode.virtual ? "not a monitored entity" : selectedNode.kind}</div><strong>{formatNodeValue(selectedNode)}</strong><span>Selected timeframe</span>{selectedNode.virtual && <p className="virtual-note">No RUM application reaches these services, and no other service is known to call them - OTLP-only services are included because their callers cannot be checked. This stands in for their callers - browsers, API clients, batch jobs - and its rate is the services' own request rate. The map shows the top services only, so the bands drawn add up to less than the total.</p>}{!selectedNode.members && !selectedNode.processes && !selectedNode.virtual && <a className="entity-link" href={buildEntityLink(selectedNode.kind, selectedNode.entityId ?? selectedNode.id.replace(/^(rum|service|paas|infrastructure)-/, ""), timeframe)} target="_blank" rel="noopener noreferrer">Open {selectedNode.name} in Dynatrace<ExternalLinkIcon /></a>}{(() => {
+    <section className="content-grid"><div className="graph-panel"><div className="panel-heading"><div><h2>Traffic map <span className="panel-badge">Smartscape</span></h2><p>Services and what connects to them · nodes and rates from metrics, relationships from the Smartscape topology</p><div className="panel-links"><button type="button" onClick={() => setSelectedQuery("rumService")}>RUM → service DQL</button><button type="button" onClick={() => setSelectedQuery("pods")}>Pods DQL</button><button type="button" onClick={() => setSelectedQuery("serviceWorkload")}>Service → workload traffic DQL</button><button type="button" onClick={() => setSelectedQuery("entryServices")}>Entry services DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcess")}>Service → process → host DQL</button><button type="button" onClick={() => setSelectedQuery("serviceProcessTraffic")}>Service → process traffic DQL</button></div></div><div className="panel-controls"><MapSearch nodes={map.nodes} onPick={setSelectedNode} /><SegmentSelector variant="compact" /><TagControl options={tagOptions} value={tags} onChange={setTags} /><PerColumnControl value={perColumn} onChange={setPerColumn} /><SortControl value={sortBy} onChange={setSortBy} /><span className="live-indicator"><i /> Live</span></div></div>{nodes.length === 0 && <p className="map-state" role="status">{isLoading ? "Loading…" : segments.length > 0 ? "No data for the selected segment. Its conditions may not apply to service metrics." : "No data in this timeframe."}</p>}{serviceFilter && !isLoading && <p className="filter-note">{filteredServiceCount > 0 ? `Filtered by tag: ${filteredServiceCount.toLocaleString()} service${filteredServiceCount === 1 ? "" : "s"}${filteredDatabaseCount > 0 ? ` (${(filteredServiceCount - filteredDatabaseCount).toLocaleString()} services + ${filteredDatabaseCount.toLocaleString()} database${filteredDatabaseCount === 1 ? "" : "s"})` : ""}` : "No services with these tags in this timeframe"} · <button type="button" onClick={() => setTags([])}>Clear</button></p>}{nodes.length > 0 && <TopologyGraph nodes={map.nodes} edges={map.edges} sortBy={sortBy} perColumn={perColumn} serviceFilter={serviceFilter} selectedId={selectedNode?.id ?? null} onSelectionChange={setSelectedNode} />}</div><aside className="details-panel"><div className="panel-heading"><div><h2>{selectedNode ? selectedNode.name : "Busiest service"}</h2><p>{selectedNode ? selectedNode.subtitle : busiestService?.unit === "req/min" ? "Highest request rate in the Services column" : "Highest traffic in the Services column"}</p></div></div>{selectedNode ? <div className="selected-detail"><div className="detail-type">{selectedNode.virtual ? "not a monitored entity" : selectedNode.kind}</div><strong>{formatNodeValue(selectedNode)}</strong><span>Selected timeframe</span>{selectedNode.virtual && <p className="virtual-note">No RUM application reaches these services, and no other service is known to call them - OTLP-only services are included because their callers cannot be checked. This stands in for their callers - browsers, API clients, batch jobs - and its rate is the services' own request rate. The map shows the top services only, so the bands drawn add up to less than the total.</p>}{!selectedNode.members && !selectedNode.processes && !selectedNode.virtual && <a className="entity-link" href={buildEntityLink(selectedNode.kind, selectedNode.entityId ?? selectedNode.id.replace(/^(rum|service|paas|infrastructure)-/, ""), timeframe)} target="_blank" rel="noopener noreferrer">Open {selectedNode.name} in Dynatrace<ExternalLinkIcon /></a>}{(() => {
       const service = serviceHealth.get(selectedNode.id);
       const host = hostHealth.get(selectedNode.id);
       const rum = rumHealth.get(selectedNode.id);

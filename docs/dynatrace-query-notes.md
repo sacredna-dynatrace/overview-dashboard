@@ -695,3 +695,47 @@ nothing.
   approach — aggregation, filtering, or drill-down — rather than a taller canvas.
 - Smartscape carries no per-relationship call volume, so `calls`, `runs in` and `runs on` edges are
   drawn without a number.
+
+## Starfield: raw root spans, sampled
+
+The Starfield page plots every root span (`request.is_root_span == true`) in a short window as a
+point: end time against duration. It is the only query that reads raw spans; metrics cannot draw it.
+
+- **Spans are sampled.** Adaptive traffic management samples busy services at the agent, and
+  aggregation folds calls together. On bby34718, 19,741 root spans in ten minutes stood for about
+  265,000 requests; half the records were sampled, up to 512 requests each. Extrapolate with
+  `coalesce(1 / ((power(2, 56) - coalesce(sampling.threshold, 0)) * power(2, -56)), 1) * coalesce(aggregation.count, 1)`.
+  A point chart therefore shows the shape of the distribution, not every request: busy services
+  are thinned the most, so counts and percentiles belong to the service metrics.
+- **Volume.** Ten minutes on bby34718 was 19,730 records, about 4 s per query. The cap is 25,000,
+  newest first (`sort end_time desc`), so a long window loses its oldest minutes and raises the
+  truncation banner.
+- **dtctl caps results at 1,000** unless given `--max-result-records`; it says so only in a warning
+  line on stderr, before the JSON.
+- Service names come from `dt.service.name` on the span; `service.name` was null on bby34718.
+- Traces open with the Distributed Tracing intent `view-trace` (`trace.id` required; `span.id`
+  and `timestamp` optional), listed by `dtctl get app dynatrace.distributedtracing`.
+
+**Live mode is a billed scan per update.** Each update re-reads the last two minutes (late spans:
+the newest root span on bby34718 was ~20 s old). Measured on bby34718: 112 MB scanned per update
+against 0.53 GiB for a full ten-minute read, billed as "Traces - Query". Every ten seconds that was
+~38 GiB an hour per open page - about half the tenant's whole daily trace-query volume in an
+eight-hour shift. Hence: 30 s is the shortest interval, updates stop while the tab is hidden, and a
+return reads from the last update so the hidden minutes leave no gap (one read of up to the window).
+
+## Shared segment and tag filters
+
+Segments and tags are chosen once (`SegmentsProvider`, `TagFilterProvider` in `App.tsx`) and hold on
+every page. How each page applies them, verified on bby34718:
+
+- **Topology:** unchanged - segments on every query except the entity list; tags filter the map.
+- **Starfield:** segments on the span query. Tags inside the query, one
+  `classicEntitySelector("type(SERVICE),tag(\"...\")")` per tag joined with `or` - tag() conditions
+  inside one selector combine with AND. Root spans there carried a host but no `k8s.cluster.name`
+  or `k8s.namespace.name` (0 of 20,238), so a Kubernetes segment empties the page.
+- **Blast radius:** segments on the problem list only; the call graph, entity lookups and the
+  description opt out with `filterSegments: []`. Tags match `entity_tags` after the per-problem
+  summarize (`iAny(entity_tags[] == "...")`), the same strings as service tags but for every entity
+  Davis attached, hosts included. Whether segments narrow `dt.davis.problems` could not be checked:
+  dtctl has no option to apply a segment.
+- Selector values escape `~` and `"` with a leading `~`.
